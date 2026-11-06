@@ -1,0 +1,47 @@
+# =====================================================================================
+# mechflow example: HCN -> HNC (a 1,2-hydrogen shift)
+#
+# Three atoms and one step: small enough to run the whole procedure on a laptop in a few
+# minutes, so it is a good first test of your ORCA set-up and of mechflow itself.
+#   mechflow validate      # checks this file and writes overview.md
+#   mechflow next          # Step 1 inputs for R1 and P1
+#   mechflow submit        # (or: mechflow submit --local  to run here without Slurm)
+#   ... repeat next / submit until 'mechflow status' says DONE, then: mechflow collect
+# =====================================================================================
+
+project:
+  name: HCN
+  title: HCN to HNC isomerisation
+  atom_numbering: 0          # atoms counted from 0, as in ORCA inputs
+
+# Only the settings that differ from the defaults (the ORCA Mechanism Procedure templates)
+# need to be given. A small basis set, no solvent and 4 cores keep this example quick.
+orca:
+  method: "!B3LYP DEF2-SVP D3BJ"
+  solvent_block: ""          # gas phase
+
+resources:
+  nprocs: 4
+  maxcore: 1000
+
+slurm:
+  time: "0-02:00"
+  mem_per_cpu: 1000MB
+
+species:
+  R1: hydrogen cyanide
+  P1: hydrogen isocyanide
+
+steps:
+  S1:
+    name: 1,2-hydrogen shift from C to N
+    reaction: R1 -> P1
+    scan: {from: R1, atoms: [2, 1], to: 1.00}    # H2 ... N1, brought together
+
+mechanisms:
+  M1:
+    name: 1,2-hydrogen shift
+    path: [R1, S1, P1]
+
+energies:
+  reference: R1

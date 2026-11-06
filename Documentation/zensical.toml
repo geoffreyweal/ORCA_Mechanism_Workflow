@@ -1,0 +1,133 @@
+# Website for mechflow, built with Zensical (https://zensical.org).
+#   Preview:  cd Documentation && zensical serve      (http://localhost:8000)
+#   Build:    cd Documentation && zensical build      (writes site/)
+# GitHub builds and publishes the site on every push to main (.github/workflows/build_documentation.yml).
+
+[project]
+site_name = "mechflow - the ORCA Mechanism Procedure for whole reaction networks"
+site_url = "https://geoffreyweal.github.io/ORCA_Mechanism_Workflow/"
+site_author = "Geoffrey Weal"
+site_description = """mechflow runs the ORCA Mechanism Procedure (SCAN, OptTS, IRC, validation, energies) \
+for every step of a reaction network, starting from a folder of xyz files."""
+
+# Repository
+repo_name = "geoffreyweal/ORCA_Mechanism_Workflow"
+repo_url = "https://github.com/geoffreyweal/ORCA_Mechanism_Workflow"
+edit_uri = "edit/main/Documentation/docs/"
+
+copyright = 'Copyright &copy; 2026 <a href="https://github.com/geoffreyweal" target="_blank" rel="noopener">Geoffrey Weal</a>'
+
+# Pages are written as page.html rather than page/index.html, so the site also works from a local copy.
+use_directory_urls = false
+
+extra_javascript = [
+  "javascripts/mathjax.js",
+  "https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js",
+]
+
+# Page tree
+nav = [
+  { "Home" = "index.md" },
+  { "Getting started" = [
+    { "Installation" = "installation.md" },
+    { "Quick start (HCN)" = "quick_start.md" },
+  ] },
+  { "Setting up a reaction" = [
+    { "Species (xyz files)" = "species.md" },
+    { "Steps and SCANs" = "steps.md" },
+    { "Mechanisms" = "mechanisms.md" },
+    { "project.yaml reference" = "project_file.md" },
+  ] },
+  { "Running" = [
+    { "The workflow stages" = "workflow.md" },
+    { "Commands" = "commands.md" },
+    { "On a Slurm cluster" = "cluster.md" },
+    { "Troubleshooting" = "troubleshooting.md" },
+  ] },
+  { "Results" = [
+    { "Energies and selectivity" = "energies.md" },
+    { "Network maps" = "maps.md" },
+  ] },
+  { "Examples" = [
+    "examples/index.md",
+    { "HCN to HNC" = "examples/hcn.md" },
+  ] },
+  { "Development" = "development.md" },
+  { "ORCA Mechanism Procedure" = "https://geoffreyweal.github.io/ORCA_Mechanism_Procedure/" },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "content.action.edit",
+  "content.action.view",
+  "content.code.annotate",
+  "content.code.copy",
+  "content.code.select",
+  "content.footnote.tooltips",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+# Light / dark mode: follow the computer's setting, or choose one with the toggle in the header.
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "material/lightbulb-multiple-outline"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "green"
+accent = "green"
+toggle.icon = "material/lightbulb"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "black"
+accent = "green"
+toggle.icon = "material/lightbulb-outline"
+toggle.name = "Switch to system preference"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github-alt"
+link = "https://github.com/geoffreyweal"
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+toc.permalink = true
+pymdownx.arithmatex.generic = true
+pymdownx.betterem.smart_enable = "all"
+pymdownx.details = {}
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.line_spans = "__span"
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
+pymdownx.mark = {}
+pymdownx.smartsymbols = {}
+pymdownx.snippets = {}
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+pymdownx.tabbed.alternate_style = true
+pymdownx.tasklist.custom_checkbox = true

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mechflow"
+dynamic = ["version"]
+description = "Run the ORCA Mechanism Procedure (SCAN -> OptTS -> IRC -> validation) for every step of a reaction network"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{name = "Geoffrey Weal"}]
+requires-python = ">=3.9"
+dependencies = ["pyyaml>=5.1"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+docs = ["zensical>=0.1"]          # the website; needs Python 3.11 or newer
+
+[project.scripts]
+mechflow = "mechflow.cli:main"
+
+[project.urls]
+Documentation = "https://geoffreyweal.github.io/ORCA_Mechanism_Workflow/"
+Source = "https://github.com/geoffreyweal/ORCA_Mechanism_Workflow"
+"ORCA Mechanism Procedure" = "https://geoffreyweal.github.io/ORCA_Mechanism_Procedure/"
+
+[tool.setuptools.dynamic]
+version = {attr = "mechflow.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

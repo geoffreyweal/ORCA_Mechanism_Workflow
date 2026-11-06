@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+
+# Documentation build
+Documentation/site/
+.cache/
+
+# What mechflow writes inside a project (keep the inputs: project.yaml and species/)
+calcs/
+results/
+maps/
+submit_ready.sh
+run_ready.sh
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
