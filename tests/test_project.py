@@ -102,6 +102,35 @@ def test_balancing_and_states(tmp_path):
         p.balance(Counter({"I1": 2}))                             # more atoms than the reference
 
 
+def test_step_direction_from_the_next_state(tmp_path):
+    # P1 + I2 holds both sides of S2 (P1 + C1 -> I2 + C2). The state written next, 2 P1, shows that S2 runs
+    # backwards here (I2 gives its proton to F-); forwards would protonate the second P1 instead.
+    text = PROJECT.replace("  P1: methanediol", "  P1: methanediol\n  I3: methanediol HF complex").replace(
+        "mechanisms:",
+        "  S2:\n    name: HF protonates methanediol\n    reaction: P1 + C1 -> I2 + C2\n"
+        "    scan: {from: I3, atoms: [1, 8], to: 1.0}\nmechanisms:").replace(
+        "energies:",
+        "  M2:\n    reference: 2 R1 + 2 R2 + 2 C1\n    path: [2 R1 + 2 R2, P1 + I2, S2, 2 P1]\nenergies:")
+    hb = XYZ["P1"][1] + [("F", 3.787, -1.193, 0), ("H", 2.965, -0.782, 0)]     # O-H...F 1.75 A from O1
+
+    def load(where, text):
+        root = make(where, text)
+        lines = ["%d" % len(hb), "methanediol HF complex charge=0 mult=1"] + ["%s %.4f %.4f %.4f" % a for a in hb]
+        write(os.path.join(root, "species", "I3.xyz"), "\n".join(lines) + "\n")
+        return Project.load(root)
+
+    p = load(tmp_path, text)
+    assert not p.errors, p.errors
+    states = p.mechanisms["M2"].states
+    assert [s.kind for s in states] == ["species", "species", "ts", "species"]
+    assert states[1].species == Counter({"P1": 1, "I2": 1}) and states[2].step == "S2"
+    assert states[3].species == Counter({"P1": 2})
+    text = text.replace("path: [2 R1 + 2 R2, P1 + I2, S2, 2 P1]", "path: [2 R1 + 2 R2, P1 + I2, S2, 2 I2]")
+    states = load(tmp_path / "fwd", text).mechanisms["M2"].states
+    assert [s.kind for s in states] == ["species", "species", "ts", "species"]
+    assert states[3].species == Counter({"I2": 2})
+
+
 def test_errors_are_reported(tmp_path):
     bad = PROJECT.replace("reaction: I1 + R2 -> I2", "reaction: I1 -> I2")
     p = Project.load(make(tmp_path, bad))
@@ -111,6 +140,15 @@ def test_errors_are_reported(tmp_path):
     assert any("not longer" in e for e in p.errors)
     p = Project.load(make(tmp_path / "c", skip=("P1",)))
     assert any("P1" in e and "xyz" in e for e in p.errors)
+
+
+def test_proton_transfers_setting(tmp_path):
+    add = "balance_with: [C1, C2]\n  proton_transfers: %s"
+    p = Project.load(make(tmp_path, PROJECT.replace("balance_with: [C1, C2]", add % "steps")))
+    assert not p.errors and p.proton_transfers == "steps"
+    p = Project.load(make(tmp_path / "b", PROJECT.replace("balance_with: [C1, C2]", add % "never")))
+    assert any("energies.proton_transfers: 'never' is not one of auto, path, steps" in e for e in p.errors)
+    assert Project.load(make(tmp_path / "c")).proton_transfers == "auto"
 
 
 def test_charge_conflict_and_multiplicity(tmp_path):

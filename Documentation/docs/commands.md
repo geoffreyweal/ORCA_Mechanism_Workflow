@@ -46,6 +46,12 @@ mechflow submit --step S2,S4,S6,S7
 `--no-squeue` stops `status`, `next` and `submit` from asking Slurm which jobs are queued. Without that
 information, a job that disappeared from the queue without an output cannot be detected.
 
+## collect options
+
+| option | meaning |
+|---|---|
+| `--proton-transfers auto/path/steps` | which proton transfers the network search may make without a barrier, for this run only (default: `energies.proton_transfers`; see [Energies](energies.md#proton-transfers-without-a-barrier)) |
+
 ## map options
 
 | option | meaning |

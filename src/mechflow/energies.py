@@ -11,6 +11,16 @@ from .project import expression
 from .workflow import HARTREE_KCAL, HARTREE_KJ, OPTTS, species_result, step_progress
 
 R_KJ = 8.314462618e-3        # kJ / (mol K)
+KB_H = 2.083661912e10        # Boltzmann constant / Planck constant, 1 / (K s)
+
+
+def eyring(en, barrier):
+    """Eyring rate constant k = (kB T / h) exp(-dG / RT), transmission coefficient 1, for a barrier in the
+    project's units. In s-1 for a step that starts from one molecule; for two molecules it is second order
+    (M-1 s-1 with standard_state: 1 M)."""
+    if barrier is None:
+        return None
+    return KB_H * en.T * math.exp(max(min(-barrier / en.RT, 700.0), -700.0))
 
 
 class Energies:
@@ -110,8 +120,10 @@ def deciding(rows_a, rows_b):
     return top(rows_a), top(rows_b), k
 
 
-def collect(project, mechs=None, outdir=None, queue=None):
-    """Write results/*.csv and results/summary.md; return the summary text."""
+def collect(project, mechs=None, outdir=None, queue=None, proton_transfers=None):
+    """Write results/*.csv and results/summary.md; return the summary text.
+
+    `proton_transfers` ('auto', 'path' or 'steps') replaces energies.proton_transfers for the network search."""
     p = project
     en = Energies(p, queue)
     outdir = outdir or p.path("results")
@@ -130,14 +142,18 @@ def collect(project, mechs=None, outdir=None, queue=None):
     with open(os.path.join(outdir, "steps.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["step", "TS", "name", "reaction", "stage", "imag_cm-1", "G_TS_Eh",
-                    "dG_act_forward_" + u, "dG_act_reverse_" + u, "dG_reaction_" + u, "used_by", "detail"])
+                    "dG_act_forward_" + u, "dG_act_reverse_" + u, "dG_reaction_" + u, "k_forward", "k_reverse",
+                    "scan_start", "dG_act_from_start_" + u, "k_from_start_s-1", "used_by", "detail"])
         for sid, st in p.steps.items():
             e = en.steps[sid]
             gl, gr = en.g_counter(st.left), en.g_counter(st.right)
             gts = None if e["gibbs"] is None else e["gibbs"] + en.per_molecule
+            fwd, rev = en.rel(gts, gl), en.rel(gts, gr)
+            from_start = en.rel(gts, en.g_species(st.start)) if st.start else None
             w.writerow([sid, st.ts, st.name, st.reaction_text(), e["stage"], _fmt(e["imag"]), _fmt(e["gibbs"], "%.8f"),
-                        _fmt(en.rel(gts, gl)), _fmt(en.rel(gts, gr)), _fmt(en.rel(gr, gl)),
-                        " ".join(st.used_by), e["detail"]])
+                        _fmt(fwd), _fmt(rev), _fmt(en.rel(gr, gl)), _fmt(eyring(en, fwd), "%.3g"),
+                        _fmt(eyring(en, rev), "%.3g"), st.start or "", _fmt(from_start),
+                        _fmt(eyring(en, from_start), "%.3g"), " ".join(st.used_by), e["detail"]])
 
     results, profile_rows = {}, {}
     with open(os.path.join(outdir, "profiles.csv"), "w", newline="") as fh:
@@ -231,7 +247,7 @@ def collect(project, mechs=None, outdir=None, queue=None):
                         _fmt(gb) or "-", _fmt(dd) or "-",
                         ("%s : %s = %s : 1" % (pa, pb, _fmt(r, "%.3g"))) if r is not None else "-"))
     try:
-        L += routes.section(p, en, outdir)
+        L += routes.section(p, en, outdir, proton_transfers)
     except Exception as exc:          # a problem in the network search must not stop summary.md being written
         traceback.print_exc()
         L += ["", routes.HEADING, "", "The search stopped with an error: %s" % exc]

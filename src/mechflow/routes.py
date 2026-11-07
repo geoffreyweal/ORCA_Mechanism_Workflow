@@ -11,6 +11,11 @@ Every mechanism and every step of a project is put into one network:
                  - an automatic proton transfer between two states that hold the same molecules apart from
                    where H atoms sit on N, O, S, P, Se or a halogen (see proton_fingerprint).
 
+energies.proton_transfers (or 'mechflow collect --proton-transfers') says which barrier-free proton transfers
+are used: 'auto' both kinds (the default), 'path' only those written in mechanism paths, 'steps' none, so
+that every proton transfer has to go through a step and its TS (when the proton transfers are steps of
+their own, e.g. X + HA -> XH+ + A-).
+
 For each product, a minimax ("bottleneck") Dijkstra search finds the route from the reference whose highest
 point (state or TS) is lowest. Routes with the same highest point are ranked by their next-highest point,
 and so on. States and TSs without an energy cannot be passed.
@@ -23,6 +28,7 @@ import os
 from collections import Counter, OrderedDict
 
 from . import chem
+from .defaults import PROTON_TRANSFER_MODES
 from .project import ProjectError, State, expression, species_sort_key
 
 #: H atoms on these elements are mobile protons; H atoms on any other element (C-H) are counted
@@ -193,16 +199,22 @@ class ProductRoutes:
 class Network:
     """Every mechanism and every step of a project as one graph of balanced states (see the module doc).
 
-    `en` is an energies.Energies object (or anything with its g_state, g_counter and rel methods)."""
+    `en` is an energies.Energies object (or anything with its g_state, g_counter and rel methods).
+    `proton_transfers` ('auto', 'path' or 'steps') replaces the project's energies.proton_transfers."""
 
-    def __init__(self, project, en):
+    def __init__(self, project, en, proton_transfers=None):
         self.project = p = project
         self.en = en
+        self.mode = proton_transfers or getattr(p, "proton_transfers", "auto")
+        if self.mode not in PROTON_TRANSFER_MODES:
+            raise ProjectError("proton_transfers must be one of %s, not '%s'" % (
+                ", ".join(PROTON_TRANSFER_MODES), self.mode))
         self.auto = set(p.auto_species)
         self.nodes = OrderedDict()         # core key -> Node
         self.edges = []
         self.adj = {}                      # core key -> [(edge, other core key)]
         self.notes = []
+        self.unused_links = []             # (mechanism, state, state) joined in a path without a step ('steps')
         self._edge_of = {}
         self._fp = {}
         self.g_ref = en.g_counter(p.reference) if p.reference else None
@@ -211,7 +223,14 @@ class Network:
         self._add_mechanisms()
         self._add_steps()
         self._choose_states()
-        self._add_proton_transfers()
+        if self.mode == "auto":
+            self._add_proton_transfers()
+        if self.unused_links:
+            m, a, b = self.unused_links[0]
+            self._note("%s in mechanism paths without a step %s not used, because proton transfers only go through "
+                       "steps (proton_transfers: steps), e.g. %s: %s -> %s" % (
+                           _count(len(self.unused_links), "link"), "is" if len(self.unused_links) == 1 else "are",
+                           m, a, b))
         self.products = self._find_products()
 
     # ------------------------------------------------------------------ building
@@ -294,8 +313,11 @@ class Network:
                     ts = (s, v)
                     continue
                 node = self._node(s.full, ref, v, m.id)
-                if prev is not None and ts is None:
-                    self._edge(prev, node, mech=m.id)
+                if prev is not None and ts is None and prev.key != node.key:
+                    if self.mode == "steps":
+                        self.unused_links.append((m.id, prev.label, node.label))
+                    else:
+                        self._edge(prev, node, mech=m.id)
                 elif prev is not None:
                     st = p.steps[ts[0].step]
                     spect = self._core(ts[0].species - Counter({st.start: 1}))
@@ -496,10 +518,10 @@ def _ratio(en, ga, gb):
     return math.exp(max(min((gb - ga) / en.RT, 700.0), -700.0))
 
 
-def section(project, en, outdir):
+def section(project, en, outdir, proton_transfers=None):
     """Search the whole network, write network_routes.csv to `outdir` and return the summary.md lines."""
     u = en.units
-    net = Network(project, en)
+    net = Network(project, en, proton_transfers)
     results = net.all_routes()
     with open(os.path.join(outdir, "network_routes.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
@@ -522,14 +544,18 @@ def section(project, en, outdir):
     n_auto = sum(1 for e in net.edges if e.auto)
     size = "%s and %s through a TS" % (_count(len(net.nodes), "state"), _count(n_ts, "connection"))
     if n_pt:
-        size = "%s, %s through a TS and %s (%d added automatically, between states with the same molecules " \
-               "apart from where H atoms sit on N, O, S, P or a halogen)" % (
+        size = "%s, %s through a TS and %s without a barrier (%d added automatically, between states with the " \
+               "same molecules apart from where H atoms sit on N, O, S, P or a halogen)" % (
                    _count(len(net.nodes), "state"), _count(n_ts, "connection"), _count(n_pt, "proton transfer"),
                    n_auto)
-    L += ["Every mechanism and every step joined into one network: %s. Steps can be used either way round. "
+    mode = {"auto": "",
+            "path": " Proton transfers without a TS are used only where a mechanism path has one (proton_transfers: "
+                    "path).",
+            "steps": " Proton transfers only go through steps and their TSs (proton_transfers: steps)."}[net.mode]
+    L += ["Every mechanism and every step joined into one network: %s. Steps can be used either way round.%s "
           "The best route to a product is the one whose highest point (state or TS) is lowest. G in %s relative "
           "to %s. Up to %d different routes per product are in network_routes.csv." % (
-              size, u, expression(project.reference), N_ROUTES), "",
+              size, mode, u, expression(project.reference), N_ROUTES), "",
           "| product | highest point | G(highest point) | effective barrier | steps from |", "|---|---|---|---|---|"]
     for res in results:
         r = res.best

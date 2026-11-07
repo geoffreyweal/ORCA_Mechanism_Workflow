@@ -17,7 +17,7 @@ import sys
 from collections import Counter
 
 from . import __version__, chem, network
-from .defaults import SETTINGS_YAML
+from .defaults import PROTON_TRANSFER_MODES, SETTINGS_YAML
 from .energies import Energies, collect
 from .orca import SUBMITTED, Queue, job_state, parse_output, slurm_problem
 from .project import PROJECT_FILE, Project, ProjectError, expression, find_project, species_sort_key
@@ -126,7 +126,8 @@ def cmd_init(args):
               " + ".join(f for f in files if f.startswith("R")) or "R1 + R2"),
           "  balance_with: []    # species added to balance states, e.g. [P2, C1, C2] (water, acid, base)",
           "  temperature: 298.15",
-          "  units: kJ/mol", ""]
+          "  units: kJ/mol",
+          "  proton_transfers: auto   # or path / steps: which proton transfers need no TS (see the docs)", ""]
     with open(target, "w") as fh:
         fh.write("\n".join(L))
     print("Wrote %s with %d species%s." % (target, len(files), "" if files else " (put your xyz files in species/)"))
@@ -356,7 +357,7 @@ def cmd_accept(args):
 def cmd_collect(args):
     p = _load(args, strict=False)
     _, _, mechs = _select(p, args)
-    text = collect(p, mechs, queue=Queue(enabled=not args.no_squeue))
+    text = collect(p, mechs, queue=Queue(enabled=not args.no_squeue), proton_transfers=args.proton_transfers)
     print(text)
     print("Written to %s" % _rel(p, p.path("results")))
 
@@ -506,6 +507,10 @@ def build_parser():
     q = sub.add_parser("collect", help="Step 5: energies, profiles and product ratios -> results/")
     filters(q)
     squeue_flag(q)
+    q.add_argument("--proton-transfers", choices=PROTON_TRANSFER_MODES,
+                   help="proton transfers without a barrier in the network search: auto (in mechanism paths and "
+                        "found automatically), path (only in mechanism paths) or steps (none: only through steps); "
+                        "default: energies.proton_transfers in project.yaml")
     q.set_defaults(func=cmd_collect)
 
     q = sub.add_parser("map", help="network map of the mechanisms -> maps/")

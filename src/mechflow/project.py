@@ -17,7 +17,7 @@ from collections import Counter, OrderedDict
 import yaml
 
 from . import chem
-from .defaults import JOB_KINDS, deep_merge, default_settings
+from .defaults import JOB_KINDS, PROTON_TRANSFER_MODES, deep_merge, default_settings
 
 PROJECT_FILE = "project.yaml"
 ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]*$")
@@ -188,6 +188,7 @@ class Project:
         self.mechanisms = OrderedDict()
         self.reference = Counter()
         self.balance_with = []
+        self.proton_transfers = "auto"
         self._balance_cache = {}
 
     # ------------------------------------------------------------------ paths
@@ -459,6 +460,12 @@ class Project:
         if bad:
             self.errors.append("energies.balance_with: unknown species %s" % ", ".join(bad))
             self.balance_with = [s for s in self.balance_with if s in self.species]
+        pt = str(e.get("proton_transfers") or "auto").strip().lower()
+        if pt not in PROTON_TRANSFER_MODES:
+            self.errors.append("energies.proton_transfers: '%s' is not one of %s" % (
+                e.get("proton_transfers"), ", ".join(PROTON_TRANSFER_MODES)))
+            pt = "auto"
+        self.proton_transfers = pt
 
     # ------------------------------------------------------------------ balancing
     @property
@@ -606,9 +613,10 @@ class Project:
     def expand(self, tokens, mid="", reference=None):
         """Turn a path (species and step IDs) into the full list of balanced states.
 
-        A step is used forwards or backwards, whichever side matches the state before it. Species of
-        that state that the step does not use (e.g. a second molecule that has already reacted) are
-        carried through the step unchanged (spectators)."""
+        A step is used forwards or backwards, whichever side matches the state before it. When both
+        sides match (a spectator is the same species as one side of the step), the state written
+        after the step decides. Species of the state before the step that the step does not use (e.g.
+        a second molecule that has already reacted) are carried through the step unchanged (spectators)."""
         ref = self.reference if reference is None else reference
         if not ref:
             raise ProjectError("no reference state (set energies.reference)")
@@ -620,8 +628,17 @@ class Project:
         def contains(big, small):
             return all(big[s] >= n for s, n in small.items())
 
+        def written_after(k):
+            """Core of the species state written right after token k (None if a step or nothing follows)."""
+            if k + 1 >= len(tokens) or tokens[k + 1] in self.steps:
+                return None
+            try:
+                return core(parse_expression(tokens[k + 1]))
+            except ProjectError:
+                return None
+
         raw = [State("species", ref, label=expression(ref), source="reference")]
-        for tok in tokens:
+        for k, tok in enumerate(tokens):
             if tok in self.steps:
                 st = self.steps[tok]
                 if not st.start:
@@ -632,10 +649,15 @@ class Project:
                 if prev.kind == "species":
                     pc, lc, rc = core(prev.species), core(st.left), core(st.right)
                     lin, rin = contains(pc, lc), contains(pc, rc)
+                    nxt = written_after(k) if (lin and rin) else None
                     if lin and not rin:
                         spect = pc - lc
                     elif rin and not lin:
                         fwd, spect = [st.right, st.left], pc - rc
+                    elif nxt is not None and ((pc - lc) + rc == nxt) != ((pc - rc) + lc == nxt):
+                        if (pc - rc) + lc == nxt:                 # only the backward step gives the next state
+                            fwd = [st.right, st.left]
+                        spect = pc - core(fwd[0])
                     else:
                         try:
                             pf = prev.species + self.balance(prev.species, ref)

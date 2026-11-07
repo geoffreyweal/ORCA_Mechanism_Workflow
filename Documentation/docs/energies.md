@@ -6,7 +6,7 @@ writes the results to `results/`:
 | file | contents |
 |---|---|
 | `species.csv` | every species: Step 1 state, G, electronic energy, notes |
-| `steps.csv` | every step: stage, imaginary frequency, G of the TS, forward and reverse barriers, reaction energy |
+| `steps.csv` | every step: stage, imaginary frequency, G of the TS, forward and reverse barriers, reaction energy, rate constants, and the barrier from the SCAN start (see [Rate constants](#rate-constants)) |
 | `profiles.csv` | every state of every mechanism, with the species added to balance it, and G relative to the reference |
 | `mechanisms.csv` | for each mechanism: highest TS, rate-limiting TS, effective barrier, whether every step is validated |
 | `families.csv` | mechanisms of one family that give different products, compared |
@@ -33,6 +33,32 @@ For each mechanism, mechflow reports:
   lowest state before it. This is the barrier that limits the rate when an intermediate lies below the
   reference;
 - **rate-limiting TS:** the TS of the effective barrier.
+
+## Rate constants
+
+`steps.csv` gives the barriers of every step, and their rate constants from the Eyring equation
+(transmission coefficient 1):
+
+\[
+k = \frac{k_\mathrm{B}T}{h}\exp\left(-\frac{\Delta G^{\ddagger}}{RT}\right)
+\]
+
+| columns of `steps.csv` | meaning |
+|---|---|
+| `dG_act_forward_kJ/mol`, `k_forward` | from the left side of the step (as written in `reaction:`) to its TS |
+| `dG_act_reverse_kJ/mol`, `k_reverse` | from the right side to the TS: the step used backwards |
+| `scan_start`, `dG_act_from_start_kJ/mol`, `k_from_start_s-1` | from the SCAN start species (`scan.from`) to the TS |
+
+- k is in s⁻¹ when the side a step starts from is one molecule. When that side is two molecules, k is a
+  second-order rate constant: in M⁻¹ s⁻¹ with `standard_state: 1 M` (see [Standard state](#standard-state)),
+  which is the right choice for reactions in solution.
+- The barrier from the SCAN start matters for a step scanned from a complex of two molecules, for example a
+  proton transfer `X + HA -> XH+ + A-` scanned from the hydrogen-bonded complex X···H–A. It is the barrier
+  inside the complex (first order, s⁻¹), without the cost of bringing the two molecules together, which is in
+  the forward barrier.
+- At 298 K, k<sub>B</sub>T/h = 6.2 × 10¹² s⁻¹: a barrier of 50 kJ/mol gives about 10⁴ s⁻¹ and one of
+  100 kJ/mol about 10⁻⁵ s⁻¹ (a half-life of about 10 hours).
+- The barriers are in the units of `energies.units`.
 
 ## Product ratios
 
@@ -73,18 +99,37 @@ that appears in several places (in two mechanisms, or as the side of a step) is 
 **Connections.**
 
 1. Two neighbouring states of a mechanism path: through the TS between them, or by a proton transfer with
-   no barrier when there is no TS.
+   no barrier when there is no TS (unless `proton_transfers: steps`, see below).
 2. Every step, between its two sides, either way round, through its TS.
-3. Automatic proton transfers (next section).
+3. Automatic proton transfers (only with `proton_transfers: auto`, the default; see below).
 
 All energies are relative to `energies.reference`. States of a mechanism with its own `reference:` (see
 [Mechanisms](mechanisms.md#a-mechanisms-own-reference)) are measured from that reference instead. Its extra
 molecules are in the state and in the reference, so they cancel, and every state has the same zero.
 
+### Proton transfers without a barrier
+
+`energies.proton_transfers` says which proton transfers the search may make without a barrier:
+
+| value | proton transfers without a TS |
+|---|---|
+| `auto` (default) | between two neighbouring states of a mechanism path with no step between them, and the automatic ones (next section) |
+| `path` | only between two neighbouring states of a mechanism path with no step between them |
+| `steps` | none: every proton transfer has to be a step, with its own TS |
+
+Use `steps` when you write every proton transfer as a step, e.g. `X + C1 -> XH+ + C2` with the acid (C1) and
+its conjugate base (C2) as species of the step, scanned from the hydrogen-bonded complex. Otherwise the
+connections without a barrier would let a route skip those steps and their barriers. With `steps`, two
+neighbouring states of a mechanism path that have no step between them are not joined, and `summary.md` says
+where that happens.
+
+`mechflow collect --proton-transfers auto` (or `path`, `steps`) replaces the setting for one run, for example to
+see how much the barriers of the proton transfers change the best routes.
+
 ### Automatic proton transfers
 
-Two states are joined by a proton transfer when they hold the same molecules apart from where H atoms sit
-on N, O, S, P, Se or a halogen. For example, the oxonium ion with A⁻ (`I2a + C2`) and the product with HA
+With `proton_transfers: auto`, two states are joined by a proton transfer when they hold the same molecules
+apart from where H atoms sit on N, O, S, P, Se or a halogen. For example, the oxonium ion with A⁻ (`I2a + C2`) and the product with HA
 (`P1a + C1`) are joined, whether or not a mechanism writes them next to each other.
 
 mechflow compares the molecules by their connectivity, read from the xyz files in `species/`:
@@ -176,6 +221,7 @@ are not affected.
 - Charged species are treated as separate ions, with implicit solvent. Absolute energies of states with
   separated ions are therefore rough. Differences between isomeric states (A versus B) are much more
   reliable, because the same errors appear on both sides.
-- Proton transfers are treated as equilibria without barriers.
+- Unless they are steps of their own (with `proton_transfers: steps`), proton transfers are treated as
+  equilibria without barriers.
 - The energies are only as good as the conformers. For the transition states that decide a selectivity,
   check the conformers.

@@ -148,6 +148,8 @@ energies:
   temperature: 298.15              # K, for the product ratios
   units: kJ/mol                    # or kcal/mol
   standard_state: 1 atm            # ORCA's values; "1 M" adds RT ln(24.5) = 7.9 kJ/mol per molecule
+  proton_transfers: auto           # proton transfers without a barrier: auto, path or steps
 ```
 
-See [Energies and selectivity](energies.md).
+See [Energies and selectivity](energies.md), and [Proton transfers without a barrier](energies.md#proton-transfers-without-a-barrier)
+for `proton_transfers`.

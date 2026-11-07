@@ -10,6 +10,7 @@ The project is a small network of C3H6O isomers (and a dimer), with HF / F- as t
 I3 is P1 protonated on O, so I3 + F- and P1 + HF are joined by an automatic proton transfer.
 """
 import csv
+import math
 import os
 from collections import Counter
 
@@ -198,6 +199,47 @@ def test_collect_writes_network_routes(tmp_path, monkeypatch):
     assert [(r["product"], r["rank"], r["bottleneck_TS"]) for r in rows if r["product"] == "P1"] == [
         ("P1", "1", "TS4"), ("P1", "2", "TS1"), ("P1", "3", "TS6")]
     assert rows[0]["route"] == "R1 + C1, S4, I4, S5, I1, I2, S2, I3, P1"
+
+
+def test_proton_transfer_modes(tmp_path):
+    p = load(tmp_path)
+    assert p.proton_transfers == "auto"
+
+    def pts(mode):
+        net = Network(p, fake_energies(p), proton_transfers=mode)
+        return net, {frozenset((net.nodes[e.a].label, net.nodes[e.b].label)) for e in net.edges if e.kind == "pt"}
+    net, found = pts("path")
+    assert found == {frozenset(("I1", "I2"))} and not net.unused_links     # the one M1 writes; none automatic
+    net, found = pts("steps")
+    assert found == set() and net.unused_links == [("M1", "I1", "I2")]
+    assert any(n.startswith("1 link in mechanism paths without a step is not used") for n in net.notes)
+    # without the automatic I3 <=> P1, P1 is only made through S7, after TS6 (120)
+    for mode in ("path", "steps"):
+        r = Network(p, fake_energies(p), proton_transfers=mode).routes_to("P1").best
+        assert r.tokens == ["R1 + C1", "S4", "I4", "S5", "I1", "S6", "I5", "S7", "P1"], mode
+        assert r.highest == ("TS6", 120.0) and r.auto_pt == []
+
+
+def test_collect_rate_constants_and_proton_transfer_option(tmp_path, monkeypatch):
+    p = load(tmp_path)
+    monkeypatch.setattr(energies, "Energies", lambda project, queue=None: fake_energies(project))
+    text = energies.collect(p, proton_transfers="steps")
+    assert "Proton transfers only go through steps and their TSs (proton_transfers: steps)." in text
+    assert "- P1: `[R1 + C1, S4, I4, S5, I1, S6, I5, S7, P1]`" in text
+    with open(os.path.join(p.root, "results", "steps.csv")) as fh:
+        rows = {r["step"]: r for r in csv.DictReader(fh)}
+
+    def k(barrier):
+        return energies.KB_H * 298.15 * math.exp(-barrier / (R_KJ * 298.15))
+    s10 = rows["S10"]                                     # I1 + I4 -> P3 (G 15 -> -40), scanned from P3, TS10 70
+    assert (s10["dG_act_forward_kJ/mol"], s10["dG_act_reverse_kJ/mol"], s10["dG_reaction_kJ/mol"]) == (
+        "55.0", "110.0", "-55.0")
+    assert s10["scan_start"] == "P3" and s10["dG_act_from_start_kJ/mol"] == "110.0"
+    assert abs(float(s10["k_forward"]) / k(55.0) - 1) < 0.01
+    assert abs(float(s10["k_reverse"]) / k(110.0) - 1) < 0.01
+    assert abs(float(s10["k_from_start_s-1"]) / k(110.0) - 1) < 0.01
+    assert abs(energies.eyring(fake_energies(p), 0.0) / 6.2124e12 - 1) < 1e-4      # kB T / h at 298.15 K
+    assert energies.eyring(fake_energies(p), None) is None
 
 
 def test_collect_with_nothing_computed(tmp_path, monkeypatch):

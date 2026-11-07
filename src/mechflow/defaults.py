@@ -86,7 +86,11 @@ ENERGY_DEFAULTS = {
     "temperature": 298.15,     # K, used for product ratios
     "units": "kJ/mol",         # or kcal/mol
     "standard_state": "1 atm", # ORCA's values; "1 M" adds RT ln(24.5) (7.9 kJ/mol at 298 K) per molecule
+    "proton_transfers": "auto",  # barrier-free proton transfers in the network search: auto, path or steps
 }
+
+#: energies.proton_transfers: which proton transfers the network search may make without a barrier
+PROTON_TRANSFER_MODES = ("auto", "path", "steps")
 
 JOB_KINDS = ("opt", "scan", "optts", "irc")
 
