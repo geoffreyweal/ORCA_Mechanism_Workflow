@@ -131,7 +131,13 @@ mechanisms:
   M1:
     name: 1,2-hydrogen shift
     path: [R1, S1, P1]
+    product: P1              # optional: product label for comparisons (default: last species of the path)
+    # reference: 2 R1        # optional: the mechanism's own reference state (default: energies.reference)
 ```
+
+A mechanism may also have a `family` (see [Mechanisms](mechanisms.md)). `reference` is for a route that needs
+more molecules than `energies.reference`, such as a second molecule of a reactant; see
+[A mechanism's own reference](mechanisms.md#a-mechanisms-own-reference).
 
 ## energies
 

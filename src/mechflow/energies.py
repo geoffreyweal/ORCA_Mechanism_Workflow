@@ -2,8 +2,10 @@
 import csv
 import math
 import os
+import traceback
+from collections import Counter
 
-from . import chem
+from . import chem, routes
 from .orca import parse_output
 from .project import expression
 from .workflow import HARTREE_KCAL, HARTREE_KJ, OPTTS, species_result, step_progress
@@ -52,7 +54,9 @@ class Energies:
     def g_state(self, state):
         if state.kind == "ts":
             g = self.steps[state.step]["gibbs"]
-            extra = self.g_counter(state.added)
+            # the TS replaces its step's start species; other species in the state are spectators
+            spect = state.species - Counter({self.project.steps[state.step].start: 1})
+            extra = self.g_counter(state.added + spect)
             return None if g is None or extra is None else g + self.per_molecule + extra
         return self.g_counter(state.full)
 
@@ -159,7 +163,7 @@ def collect(project, mechs=None, outdir=None, queue=None):
     for mid, (m, hi, eff, comp, val) in results.items():
         if comp and hi and (m.product not in best or hi[1] < best[m.product][1]):
             best[m.product] = (mid, hi[1], hi[0], val)
-    prods = sorted(set(m.product for m, *_ in results.values()))
+    prods = sorted(set(m.product for m, *_ in results.values() if m.product))
 
     def ratio(ga, gb):
         x = max(min((gb - ga) / en.RT, 700.0), -700.0)
@@ -226,7 +230,13 @@ def collect(project, mechs=None, outdir=None, queue=None):
                         f, ma, pa, mb, pb, ta[0] if ta else "-", tb[0] if tb else "-", _fmt(ga) or "-",
                         _fmt(gb) or "-", _fmt(dd) or "-",
                         ("%s : %s = %s : 1" % (pa, pb, _fmt(r, "%.3g"))) if r is not None else "-"))
-    L += ["", "Files: species.csv, steps.csv, profiles.csv, mechanisms.csv, families.csv (this folder).", ""]
+    try:
+        L += routes.section(p, en, outdir)
+    except Exception as exc:          # a problem in the network search must not stop summary.md being written
+        traceback.print_exc()
+        L += ["", routes.HEADING, "", "The search stopped with an error: %s" % exc]
+    L += ["", "Files: species.csv, steps.csv, profiles.csv, mechanisms.csv, families.csv, network_routes.csv "
+          "(this folder).", ""]
     text = "\n".join(L)
     with open(os.path.join(outdir, "summary.md"), "w") as fh:
         fh.write(text)

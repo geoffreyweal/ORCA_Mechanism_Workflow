@@ -41,7 +41,12 @@ def overview(project, mermaid=True):
          "- Names: R reactants, I intermediates, P products, C catalysts / species used during the reaction, "
          "S steps; step Sn goes through transition state TSn.",
          "- Energy reference (G = 0): %s; states are balanced with %s." % (
-             expression(p.reference), ", ".join(p.auto_species) or "nothing"), ""]
+             expression(p.reference), ", ".join(p.auto_species) or "nothing")]
+    own = [m for m in p.mechanisms.values() if m.reference]
+    if own:
+        L.append("- Mechanisms with their own reference (extra molecules that cancel out): %s." % "; ".join(
+            "%s (%s)" % (m.id, expression(m.reference)) for m in own))
+    L.append("")
     L += ["## Species", "", "| ID | role | name | formula | charge | mult | atoms | used by |",
           "|---|---|---|---|---|---|---|---|"]
     for sid, sp in p.species.items():

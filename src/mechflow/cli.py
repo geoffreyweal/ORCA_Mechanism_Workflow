@@ -154,9 +154,11 @@ def cmd_validate(args):
     with open(p.path("overview.md"), "w") as fh:
         fh.write(text)
     n_states = sum(len(m.states) for m in p.mechanisms.values())
-    print("\n%s, %s, %s (%s, all balanced against %s)." % (
+    own = [m.id for m in p.mechanisms.values() if m.reference]
+    print("\n%s, %s, %s (%s, balanced against %s%s)." % (
         plural(len(p.species), "species", "species"), plural(len(p.steps), "step"),
-        plural(len(p.mechanisms), "mechanism"), plural(n_states, "state"), expression(p.reference)))
+        plural(len(p.mechanisms), "mechanism"), plural(n_states, "state"), expression(p.reference),
+        "; %s use their own reference" % ", ".join(own) if own else ""))
     print("Wrote overview.md")
     if p.errors:
         print("\n%d problem(s) to fix." % len(p.errors))

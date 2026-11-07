@@ -169,6 +169,7 @@ class Mechanism:
         self.tokens = []
         self.states = []
         self.product = None
+        self.reference = None         # own reference state (e.g. two molecules of a reactant); None = project's
         self.notes = []
 
 
@@ -463,40 +464,52 @@ class Project:
     @property
     def auto_species(self):
         """Species that are added to states automatically (unreacted reference species and balancers)."""
-        out = list(self.reference)
+        out = self.auto_for(self.reference)
+        for m in self.mechanisms.values():
+            for s in (m.reference or ()):
+                if s not in out:
+                    out.append(s)
+        return out
+
+    def auto_for(self, reference):
+        """Species added automatically when balancing against `reference`."""
+        out = list(reference)
         for s in self.balance_with:
             if s not in out:
                 out.append(s)
         return out
 
-    def balance(self, counter):
+    def balance(self, counter, reference=None):
         """Species to add to `counter` so that it has exactly the atoms and charge of the reference.
 
-        Uses the reference species (still unreacted) and energies.balance_with. Returns a Counter."""
-        key = tuple(sorted(counter.items()))
+        Uses the reference species (still unreacted) and energies.balance_with. `reference` is the
+        project's reference unless a mechanism has its own. Returns a Counter."""
+        ref = self.reference if reference is None else reference
+        key = (tuple(sorted(counter.items())), tuple(sorted(ref.items())))
         if key in self._balance_cache:
             res = self._balance_cache[key]
             if isinstance(res, Exception):
                 raise res
             return Counter(res)
         try:
-            res = self._solve_balance(counter)
+            res = self._solve_balance(counter, ref)
         except BalanceError as exc:
             self._balance_cache[key] = exc
             raise
         self._balance_cache[key] = res
         return Counter(res)
 
-    def _solve_balance(self, counter):
-        fref, qref = self.side_formula(self.reference)
+    def _solve_balance(self, counter, reference=None):
+        ref = self.reference if reference is None else reference
+        fref, qref = self.side_formula(ref)
         f, q = self.side_formula(counter)
         diff = {el: fref.get(el, 0) - f.get(el, 0) for el in set(fref) | set(f)}
         neg = {el: -v for el, v in diff.items() if v < 0}
         if neg:
             raise BalanceError("%s has more atoms than the reference %s (extra %s)" % (
-                expression(counter), expression(self.reference), chem.formula_string(neg)))
+                expression(counter), expression(ref), chem.formula_string(neg)))
         dq = qref - q
-        cands = [s for s in self.auto_species if self.species[s].mol is not None]
+        cands = [s for s in self.auto_for(ref) if self.species[s].mol is not None]
         forms = [(s, self.species[s].formula, self.species[s].charge) for s in cands]
         sols = []
 
@@ -522,7 +535,7 @@ class Project:
         dfs(0, diff, dq, [])
         if not sols:
             raise BalanceError("%s cannot be balanced against the reference %s with %s (missing %s, charge %+d)" % (
-                expression(counter), expression(self.reference), ", ".join(cands) or "nothing",
+                expression(counter), expression(ref), ", ".join(cands) or "nothing",
                 chem.formula_string({k: v for k, v in diff.items() if v}), dq))
         best = min(sum(s.values()) for s in sols)
         bests = [s for s in sols if sum(s.values()) == best]
@@ -553,8 +566,19 @@ class Project:
             m.family = str(e["family"]) if e.get("family") else (
                 mid[:-1] if re.match(r"^.*\d[A-Za-z]$", mid) else mid)
             m.tokens = [str(t) for t in e["path"]]
+            if e.get("reference"):
+                try:
+                    ref = parse_expression(e["reference"])
+                except ProjectError as exc:
+                    self.errors.append("mechanism %s: reference: %s" % (mid, exc))
+                    continue
+                bad = [s for s in ref if s not in self.species]
+                if bad:
+                    self.errors.append("mechanism %s: reference: unknown species %s" % (mid, ", ".join(bad)))
+                    continue
+                m.reference = ref
             try:
-                m.states = self.expand(m.tokens, mid)
+                m.states = self.expand(m.tokens, mid, reference=m.reference)
             except ProjectError as exc:
                 self.errors.append("mechanism %s: %s" % (mid, exc))
                 m.states = []
@@ -579,11 +603,24 @@ class Project:
                     if sid in self.species and st.id not in self.species[sid].used_by:
                         self.species[sid].used_by.append(st.id)
 
-    def expand(self, tokens, mid=""):
-        """Turn a path (species and step IDs) into the full list of balanced states."""
-        if not self.reference:
+    def expand(self, tokens, mid="", reference=None):
+        """Turn a path (species and step IDs) into the full list of balanced states.
+
+        A step is used forwards or backwards, whichever side matches the state before it. Species of
+        that state that the step does not use (e.g. a second molecule that has already reacted) are
+        carried through the step unchanged (spectators)."""
+        ref = self.reference if reference is None else reference
+        if not ref:
             raise ProjectError("no reference state (set energies.reference)")
-        raw = [State("species", self.reference, label=expression(self.reference), source="reference")]
+        auto = set(self.auto_for(ref))
+
+        def core(c):
+            return Counter({s: n for s, n in c.items() if s not in auto and n > 0})
+
+        def contains(big, small):
+            return all(big[s] >= n for s, n in small.items())
+
+        raw = [State("species", ref, label=expression(ref), source="reference")]
         for tok in tokens:
             if tok in self.steps:
                 st = self.steps[tok]
@@ -591,18 +628,29 @@ class Project:
                     raise ProjectError("step %s has problems (see above)" % tok)
                 prev = raw[-1]
                 fwd = [st.left, st.right]
+                spect = Counter()
                 if prev.kind == "species":
-                    try:
-                        pf = prev.species + self.balance(prev.species)
-                        lf = st.left + self.balance(st.left)
-                        rf = st.right + self.balance(st.right)
-                        if pf == rf and pf != lf:
-                            fwd = [st.right, st.left]
-                    except BalanceError:
-                        pass
-                raw.append(State("species", fwd[0], label=expression(fwd[0]), source="step"))
-                raw.append(State("ts", Counter({st.start: 1}), step=tok, label=st.ts))
-                raw.append(State("species", fwd[1], label=expression(fwd[1]), source="step"))
+                    pc, lc, rc = core(prev.species), core(st.left), core(st.right)
+                    lin, rin = contains(pc, lc), contains(pc, rc)
+                    if lin and not rin:
+                        spect = pc - lc
+                    elif rin and not lin:
+                        fwd, spect = [st.right, st.left], pc - rc
+                    else:
+                        try:
+                            pf = prev.species + self.balance(prev.species, ref)
+                            lf = st.left + self.balance(st.left, ref)
+                            rf = st.right + self.balance(st.right, ref)
+                            if pf == rf and pf != lf:
+                                fwd = [st.right, st.left]
+                        except BalanceError:
+                            pass
+                        if lin and rin:
+                            spect = pc - core(fwd[0])
+                a, b = fwd[0] + spect, fwd[1] + spect
+                raw.append(State("species", a, label=expression(a), source="step"))
+                raw.append(State("ts", Counter({st.start: 1}) + spect, step=tok, label=st.ts))
+                raw.append(State("species", b, label=expression(b), source="step"))
             else:
                 try:
                     c = parse_expression(tok)
@@ -615,7 +663,7 @@ class Project:
                 raw.append(State("species", c, label=tok, source="path"))
         for s in raw:
             try:
-                s.added = self.balance(s.species)
+                s.added = self.balance(s.species, ref)
             except BalanceError as exc:
                 raise ProjectError("state '%s': %s" % (s.label, exc))
         # merge neighbours that are the same state (a path species written next to the step side it equals)

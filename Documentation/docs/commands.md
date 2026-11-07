@@ -19,7 +19,7 @@ Run every command inside a project folder (or any folder below it), or give `-p 
 | `mechflow scan-profile S5` | the SCAN energy profile of a step, with the TS guess marked |
 | `mechflow restart-scan S5` | restarts a SCAN that stopped |
 | `mechflow accept ID ...` | accepts a species' Step 1 structure, or a step's Step 4B result, that was flagged CHECK |
-| `mechflow collect` | Step 5: energies, profiles, product ratios → `results/` |
+| `mechflow collect` | Step 5: energies, profiles, product ratios and the best routes through the whole network → `results/` |
 | `mechflow map` | network maps → `maps/` |
 | `mechflow atoms I4 [i j]` | the numbered atoms of a species, or the distance between two of them |
 

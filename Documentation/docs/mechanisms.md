@@ -20,6 +20,7 @@ mechanisms:
 | `name` | free text |
 | `product` | the product label used for comparisons (default: the last species of the path) |
 | `family` | mechanisms of the same family are compared with each other (default: the ID without a final letter, so M1A and M1B are family M1) |
+| `reference` | the mechanism's own reference state, for a route that needs more molecules than `energies.reference` (see [below](#a-mechanisms-own-reference)) |
 
 ## Reading a path
 
@@ -64,6 +65,43 @@ product state is `P1a + C1`, with the proton back on the acid.
 `mechflow validate` reports any state that cannot be balanced. A state that needs atoms the reference does
 not have, or that could be balanced in two ways, must be written out in full.
 
+## Spectators
+
+When a state holds two molecules and the next step uses only one of them, the other molecule is carried
+through the step unchanged. It is a **spectator**. In a path such as
+
+```yaml
+path: [R1 + R2, ..., I7a + I9a, S5a, I7a + I11a, ...]     # step S5a is I9a -> I11a
+```
+
+I7a is a spectator of S5a. The three states are `I7a + I9a`, `TS5a + I7a` and `I7a + I11a`, and the energy
+of the TS state includes G(I7a). You do not have to write anything for this: mechflow compares the step with
+the state before it and carries the rest along.
+
+## A mechanism's own reference
+
+Every state of a mechanism must contain the atoms of the reference. A route that needs more molecules than
+`energies.reference` has, for example a second molecule of a reactant, needs its own reference. In the
+epoxide example, the product P1a can open a second protonated epoxide and give a dimer ether (P2):
+
+```yaml
+mechanisms:
+  M2:
+    name: the product opens a second protonated epoxide
+    reference: 2 R1 + R2 + C1          # two epoxides, one methanol, one acid
+    path: [R1 + R2, I1, S1a, I2a, P1a + I1, S3, I3, P2]
+```
+
+Until the second epoxide reacts, the balancing adds it as an unreacted R1: the state I1 becomes
+`I1 + R1 + R2 + C2`. I2a then gives its proton to the second epoxide (`P1a + I1`), and the OH group of P1a
+opens it in step S3 (`P1a + I1 -> I3`).
+
+The extra R1 is in every state of M2 and in its reference, so it cancels: the energies of M2 are on the same
+scale as those of the other mechanisms. For the [search through the whole
+network](energies.md#best-routes-through-the-whole-network), a mechanism's own reference must contain the
+project's reference (here `R1 + R2 + C1` and one more R1); a mechanism whose reference does not is left out of
+that search.
+
 ## Products and families
 
 `mechflow collect` compares mechanisms in two ways:
@@ -72,6 +110,9 @@ not have, or that could be balanced in two ways, must be written out in full.
   the product ratio from the best mechanisms (see [Energies](energies.md)).
 - **Within a family.** Mechanisms of one family that end in different products, such as M1A (→ P1a) and
   M1B (→ P1b), are compared directly.
+
+It also joins every mechanism and every step into one network and finds the best route to each product
+through it, combining steps of different mechanisms (see [Energies](energies.md#best-routes-through-the-whole-network)).
 
 ## Checks
 

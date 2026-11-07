@@ -10,6 +10,7 @@ src/mechflow/
     orca.py         ORCA inputs, Slurm scripts, reading outputs, job states
     chem.py         xyz files, formulas, bonds, fragments, connectivity fingerprints
     energies.py     Step 5: energies, profiles, product ratios
+    routes.py       Step 5: the best route to each product through the whole network
     network.py      maps (Graphviz and Mermaid)
     report.py       overview.md
     defaults.py     default settings (the procedure's templates, chloroform)
@@ -29,7 +30,8 @@ pytest
 
 The tests take the HCN example through every stage with fabricated outputs (including a SCAN restart and a
 choice of SCAN image). They also check that the inputs match the procedure's templates, test the balancing on
-a small acid-catalysed reaction, and check that every project in `examples/` loads without problems.
+a small acid-catalysed reaction, search a small made-up network for the best routes (`tests/test_routes.py`),
+and check that every project in `examples/` loads without problems.
 
 `tests/fake_orca.py` can also be used by hand, to try a project without ORCA:
 
