@@ -67,10 +67,15 @@ def build(project, mechs):
                 node["mechs"].append(m.id)
             if prev_key is not None and (prev_key != key or ts is not None):
                 step = ts.step if ts is not None else None
-                note = _direction_notes(project, project.steps[step], prev_state, g.nodes[prev_key]["species"],
-                                        species) if step else ""
-                e = g.edges.setdefault((prev_key, key, step), {"mechs": [], "step": step, "note": note,
-                                                              "state": ts})
+                back = g.edges.get((key, prev_key, step))
+                if back is not None and prev_key != key:
+                    e = back                     # the same step between the same states, used the other way round:
+                    e["both"] = True             # one connection, used both ways (drawn with two heads)
+                else:
+                    note = _direction_notes(project, project.steps[step], prev_state, g.nodes[prev_key]["species"],
+                                            species) if step else ""
+                    e = g.edges.setdefault((prev_key, key, step), {"mechs": [], "step": step, "note": note,
+                                                                  "state": ts, "both": False})
                 if m.id not in e["mechs"]:
                     e["mechs"].append(m.id)
             prev_key, prev_state, ts = key, s, None
@@ -179,6 +184,8 @@ def to_dot(project, g, title="", status=None, energies=None, colour_mechs=False,
                                                                           "2.2" if s in ("done", "check") else "1.3"))
             elif colour_mechs and len(e["mechs"]) == 1:
                 attrs.append('color="%s", fontcolor="%s"' % (mcol[e["mechs"][0]], mcol[e["mechs"][0]]))
+            if e.get("both"):
+                attrs.append("dir=both")         # mechanisms use this step both ways round
         else:
             attrs.append('style=dashed, dir=both, arrowsize=0.5, color="#757575", tooltip="proton transfer (equilibrium)"')
         out.append("  %s -> %s [%s];" % (ids[a], ids[b], ", ".join(attrs)))
@@ -206,7 +213,7 @@ def to_mermaid(project, g, status=None, names=True):
     for (a, b, step), e in g.edges.items():
         if step:
             lab = step if not e["note"] else "%s %s" % (step, e["note"])
-            out.append('  %s -->|"%s"| %s' % (ids[a], _mm(lab), ids[b]))
+            out.append('  %s %s|"%s"| %s' % (ids[a], "<-->" if e.get("both") else "-->", _mm(lab), ids[b]))
         else:
             out.append("  %s -.- %s" % (ids[a], ids[b]))
         links.append(step)

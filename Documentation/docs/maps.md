@@ -4,7 +4,8 @@
 
 - **boxes** are the species a mechanism passes through. The start (the reactants) is yellow, and products
   have a double border;
-- **solid arrows** are steps, labelled with the step ID (step Sn goes through TSn);
+- **solid arrows** are steps, labelled with the step ID (step Sn goes through TSn). A step that some mechanisms use
+  forwards and others backwards between the same two boxes is drawn once, with an arrowhead at each end;
 - **dashed lines** are proton-transfer equilibria (two species written next to each other in a path);
 - **+X / −X** on an arrow: a reactant or balancing species that the step uses or releases and that is not
   shown in the boxes, e.g. `S1a +R2` (methanol adds) or `S3 -P2` (water leaves).

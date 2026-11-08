@@ -14,7 +14,7 @@ import math
 import os
 from collections import Counter
 
-from mechflow import energies, routes
+from mechflow import energies, network, routes
 from mechflow.energies import R_KJ, Energies
 from mechflow.project import Project
 from mechflow.routes import Network, proton_fingerprint
@@ -240,6 +240,24 @@ def test_collect_rate_constants_and_proton_transfer_option(tmp_path, monkeypatch
     assert abs(float(s10["k_from_start_s-1"]) / k(110.0) - 1) < 0.01
     assert abs(energies.eyring(fake_energies(p), 0.0) / 6.2124e12 - 1) < 1e-4      # kB T / h at 298.15 K
     assert energies.eyring(fake_energies(p), None) is None
+
+
+def test_map_draws_a_step_used_both_ways_once(tmp_path):
+    # M2 uses S5 backwards (I4 -> I1); M4 uses it forwards (I1 -> I4): one connection, used both ways round
+    root = str(tmp_path / "proj")
+    for sid, (comment, atoms) in XYZ.items():
+        lines = ["%d" % len(atoms), comment] + ["%s %.4f %.4f %.4f" % a for a in atoms]
+        write(os.path.join(root, "species", sid + ".xyz"), "\n".join(lines) + "\n")
+    write(os.path.join(root, "project.yaml"), PROJECT.replace("  M3: {", "  M4: {path: [R1, S1, I1, S5, I4]}\n  M3: {"))
+    p = Project.load(root)
+    assert not p.errors, p.errors
+    g = network.build(p, list(p.mechanisms.values()))
+    s5 = [e for (a, b, st), e in g.edges.items() if st == "S5"]
+    assert len(s5) == 1 and s5[0]["both"] and sorted(s5[0]["mechs"]) == ["M2", "M4"]
+    assert not any(e["both"] for (a, b, st), e in g.edges.items() if st != "S5")
+    dot = [ln for ln in network.to_dot(p, g).splitlines() if 'label="S5' in ln]
+    assert len(dot) == 1 and "dir=both" in dot[0]
+    assert sum("<-->" in ln for ln in network.to_mermaid(p, g).splitlines()) == 1
 
 
 def test_collect_with_nothing_computed(tmp_path, monkeypatch):
