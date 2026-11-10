@@ -5,6 +5,8 @@
     Step 3    OptTS from the highest SCAN point            calcs/Steps/<ID>/Step3_Opt_TS
     Step 4A   IRC from the transition state                calcs/Steps/<ID>/Step4A_IRC
     Step 4B   optimise both IRC end points                 calcs/Steps/<ID>/Step4B_Validate/{Forwards,Backwards}
+    SP        single points (optional: single_point.enabled), e.g. DLPNO-CCSD(T), on each optimised species
+              and transition state            calcs/Species/<ID>/SP_Single_Point, calcs/Steps/<ID>/SP_Single_Point
     Step 5    energies                                     mechflow collect
 """
 import glob
@@ -24,6 +26,7 @@ SCAN = "Step2Ba_SCAN"
 OPTTS = "Step3_Opt_TS"
 IRC = "Step4A_IRC"
 VALIDATE = "Step4B_Validate"
+SP = "SP_Single_Point"
 ACCEPTED = ".accepted"       # written by 'mechflow accept'
 
 
@@ -92,10 +95,12 @@ def species_result(project, sp, queue=None):
     """State of a species' Step 1 optimisation and whether its result can be used."""
     d = project.species_job_dir(sp.id)
     state = job_state(d, queue)
-    res = {"state": state, "ok": False, "gibbs": None, "e_el": None, "note": "", "xyz": None, "imag": []}
+    res = {"state": state, "ok": False, "gibbs": None, "e_el": None, "g_minus_eel": None, "note": "", "xyz": None,
+           "imag": []}
     if state == "finished":
         r = parse_output(os.path.join(d, "output.out"))
         res["gibbs"], res["e_el"], res["imag"] = r["gibbs"], r["e_el"], r["imag"]
+        res["g_minus_eel"] = r["g_minus_eel"]
         xyz = os.path.join(d, "orca.xyz")
         if not r["opt_converged"]:
             res["note"] = "optimisation did not converge"
@@ -122,6 +127,62 @@ def species_result(project, sp, queue=None):
     elif state == "failed":
         res["note"] = slurm_problem(d) or "ORCA stopped with an error - see output.out"
     return res
+
+
+# ============================================================================== SP: single points
+
+def sp_enabled(project):
+    return bool((project.settings.get("single_point") or {}).get("enabled"))
+
+
+def species_sp_dir(project, sid):
+    return project.path("calcs", "Species", sid, SP)
+
+
+def step_sp_dir(project, sid):
+    return os.path.join(project.step_dir(sid), SP)
+
+
+def ts_result(project, st):
+    """The Step 3 OptTS of a step when it is a usable TS (converged, exactly one imaginary frequency), else None."""
+    t3 = os.path.join(project.step_dir(st.id), OPTTS)
+    r = parse_output(os.path.join(t3, "output.out"))
+    if r["terminated_normally"] and r["opt_converged"] and len(r["imag"]) == 1 and os.path.isfile(os.path.join(t3, "orca.xyz")):
+        r["xyz"] = os.path.join(t3, "orca.xyz")
+        return r
+    return None
+
+
+def sp_setup(project, item, kind="species", queue=None):
+    """Write the single point (SP) of a species (from its Step 1 structure) or of a step's TS (from its Step 3
+    structure) once that structure is ready. Returns a message or None."""
+    if not sp_enabled(project):
+        return None
+    if kind == "species":
+        sp = item
+        d, r = species_sp_dir(project, sp.id), species_result(project, sp, queue)
+        xyz = r["xyz"] if r["ok"] else None
+        charge, mult, name, over, label = sp.charge, sp.mult, sp.id, sp.overrides, sp.id
+    else:
+        st = item
+        d, r = step_sp_dir(project, st.id), ts_result(project, st)
+        xyz = r["xyz"] if r else None
+        charge, mult, name, over, label = st.charge, st.mult, st.id, st.overrides, st.ts
+    if xyz is None or job_state(d, queue) != "absent":
+        return None
+    os.makedirs(d, exist_ok=True)
+    shutil.copy(xyz, os.path.join(d, "opt_structure.xyz"))
+    write_job(d, project.settings, "sp", "opt_structure.xyz", charge, mult, jobname(project, name, "SP"),
+              overrides=over, info={"item": name, "stage": "SP"})
+    return "single point (SP) of %s written" % label
+
+
+def sp_energy(folder, queue=None):
+    """(state, E in Eh or None) of a single point (SP)"""
+    state = job_state(folder, queue)
+    if state != "finished":
+        return state, None
+    return state, parse_output(os.path.join(folder, "output.out"))["e_el"]
 
 
 def species_geometry(project, sid, queue=None):
@@ -453,6 +514,7 @@ def job_folders(project, species, steps):
     """Every job folder of the chosen species and steps, in a sensible order."""
     for sp in species:
         yield project.species_job_dir(sp.id)
+        yield species_sp_dir(project, sp.id)
     for st in steps:
         sd = project.step_dir(st.id)
         for f in scan_folders(sd):
@@ -461,6 +523,7 @@ def job_folders(project, species, steps):
         yield os.path.join(sd, IRC)
         yield os.path.join(sd, VALIDATE, "Forwards")
         yield os.path.join(sd, VALIDATE, "Backwards")
+        yield os.path.join(sd, SP)
 
 
 def refresh(project, folders, queue=None):

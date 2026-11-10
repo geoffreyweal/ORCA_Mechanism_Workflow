@@ -2,7 +2,7 @@
 
     mechflow init                  write project.yaml for the xyz files in species/
     mechflow validate              check the project, write overview.md
-    mechflow next                  write every input that can be written now (Step 1 ... Step 4B)
+    mechflow next                  write every input that can be written now (Step 1 ... Step 4B, single points)
     mechflow submit                write submit_ready.sh for the prepared jobs (--run: sbatch now)
     mechflow status                where every species and step is up to
     mechflow collect               Step 5: energies, profiles, product ratios -> results/
@@ -23,7 +23,8 @@ from .orca import SUBMITTED, Queue, job_state, parse_output, slurm_problem
 from .project import PROJECT_FILE, Project, ProjectError, expression, find_project, species_sort_key
 from .report import overview, plural
 from .workflow import (ACCEPTED, VALIDATE, job_folders, prepare, refresh, restart_scan, retire, scan_maximum,
-                       scan_points, scan_profile_text, species_result, species_setup, step_progress)
+                       scan_points, scan_profile_text, sp_enabled, sp_setup, species_result, species_setup,
+                       species_sp_dir, step_progress, step_sp_dir)
 
 
 def _die(msg, code=1):
@@ -191,6 +192,15 @@ def cmd_status(args):
             if args.brief and stage in ("DONE", "waiting"):
                 continue
             print("  %-7s %-8s %s%s" % (st.id, stage, detail, "   -> mechflow next" if action else ""))
+    if sp_enabled(p):
+        spc = Counter(job_state(species_sp_dir(p, sp.id), q) for sp in species)
+        spc.update(job_state(step_sp_dir(p, st.id), q) for st in steps)
+        method = str((p.settings.get("single_point") or {}).get("method", "")).lstrip("!").strip()
+        print("\nSINGLE POINTS (%s): %s" % (method, ", ".join("%s %d" % kv for kv in sorted(spc.items()))))
+        if spc.get("failed"):
+            print("  failed: " + " ".join(
+                [sp.id for sp in species if job_state(species_sp_dir(p, sp.id), q) == "failed"] +
+                [st.ts for st in steps if job_state(step_sp_dir(p, st.id), q) == "failed"]))
     sp_c = ", ".join("%s %d" % (k.split(" ", 1)[1], v) for k, v in sorted(counts.items()) if k.startswith("species"))
     st_c = ", ".join("%s %d" % (k.split(" ", 1)[1], v) for k, v in sorted(counts.items()) if k.startswith("steps"))
     print("\nSpecies: %s\nSteps:   %s" % (sp_c or "-", st_c or "-"))
@@ -242,8 +252,15 @@ def cmd_next(args):
                 n_st += 1
             except (ValueError, OSError) as exc:
                 print("%-7s could not prepare %s: %s" % (st.id, stage, exc))
-    print("\nPrepared %d species and %d step stage(s). Next: mechflow submit" % (n_sp, n_st)
-          if (n_sp or n_st) else "\nNothing new to prepare (see 'mechflow status').")
+    n_sp_jobs = 0
+    if sp_enabled(p):              # the single points (SP) of every optimised species and TS
+        for item, kind, lab in [(sp, "species", sp.id) for sp in species] + [(st, "step", st.id) for st in steps]:
+            msg = sp_setup(p, item, kind, q)
+            if msg:
+                print("%-7s %s" % (lab, msg))
+                n_sp_jobs += 1
+    print("\nPrepared %d species, %d step stage(s) and %d single point(s). Next: mechflow submit" % (n_sp, n_st, n_sp_jobs)
+          if (n_sp or n_st or n_sp_jobs) else "\nNothing new to prepare (see 'mechflow status').")
 
 
 def cmd_submit(args):
@@ -357,7 +374,10 @@ def cmd_accept(args):
 def cmd_collect(args):
     p = _load(args, strict=False)
     _, _, mechs = _select(p, args)
-    text = collect(p, mechs, queue=Queue(enabled=not args.no_squeue), proton_transfers=args.proton_transfers)
+    if args.level == "sp" and not sp_enabled(p):
+        _die("--level sp needs single_point.enabled: true in project.yaml")
+    text = collect(p, mechs, queue=Queue(enabled=not args.no_squeue), proton_transfers=args.proton_transfers,
+                   level=args.level)
     print(text)
     print("Written to %s" % _rel(p, p.path("results")))
 
@@ -511,6 +531,9 @@ def build_parser():
                    help="proton transfers without a barrier in the network search: auto (in mechanism paths and "
                         "found automatically), path (only in mechanism paths) or steps (none: only through steps); "
                         "default: energies.proton_transfers in project.yaml")
+    q.add_argument("--level", choices=("dft", "sp"),
+                   help="energies to use: dft (G of the DFT frequency job) or sp (E of the single point + [G - E(el)] "
+                        "of the DFT job); default: sp when single_point.enabled, else dft")
     q.set_defaults(func=cmd_collect)
 
     q = sub.add_parser("map", help="network map of the mechanisms -> maps/")

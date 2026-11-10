@@ -51,6 +51,20 @@ orca:
   scan_maxiter: 200       # adds "MaxIter 200" to the SCAN %GEOM block (the procedure's fix for SCAN points
                           # that hit the 50-cycle limit); set to null to leave it out
 
+# -------------------------------------------------------------------------------------
+# Single points (SP, optional): a higher-level single-point energy on every optimised structure
+# (each species from Step 1, each transition state from Step 3), e.g. DLPNO-CCSD(T)
+# on the DFT geometries. 'mechflow collect' then uses
+#     G = E(single point) + [G - E(el)] of the DFT frequency calculation
+# (use 'mechflow collect --level dft' for the DFT free energies alone).
+# The single points use the scf_block and solvent_block above (the same solvent).
+# -------------------------------------------------------------------------------------
+single_point:
+  enabled: false          # true: 'mechflow next' also writes the Step 5 single points
+  method: "!DLPNO-CCSD(T) def2-TZVPP def2-TZVPP/C TightPNO"
+  keywords: "!RIJCOSX def2/J TightSCF defgrid2"
+  block: ""               # extra input for the single points, e.g. a %MDCI block
+
 resources:
   nprocs: 32              # cores per job (%PAL NPROCS and --ntasks)
   maxcore: 2000           # MB per core (%maxcore)
@@ -63,9 +77,11 @@ slurm:
   extra_sbatch: []        # extra "#SBATCH ..." lines, e.g. ["#SBATCH --account=nesi12345"]
   extra_lines: []         # shell lines run before ORCA starts, e.g. ["module purge"]
 
-# Different resources for one kind of job (opt = Step 1 and Step 4B, scan, optts, irc), e.g.
+# Different resources for one kind of job (opt = Step 1 and Step 4B, scan, optts, irc,
+# sp = the single points), e.g.
 #   stage_overrides:
 #     optts: {time: "5-00:00"}
+#     sp: {maxcore: 4000, mem_per_cpu: 5000MB}     # DLPNO-CCSD(T) needs more memory per core
 stage_overrides: {}
 
 scan:
@@ -92,7 +108,8 @@ ENERGY_DEFAULTS = {
 #: energies.proton_transfers: which proton transfers the network search may make without a barrier
 PROTON_TRANSFER_MODES = ("auto", "path", "steps")
 
-JOB_KINDS = ("opt", "scan", "optts", "irc")
+JOB_KINDS = ("opt", "scan", "optts", "irc", "sp")
+DFT_KINDS = ("opt", "scan", "optts", "irc")       # the kinds that use orca.method and orca.keywords
 
 
 def default_settings():

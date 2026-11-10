@@ -50,6 +50,7 @@ information, a job that disappeared from the queue without an output cannot be d
 
 | option | meaning |
 |---|---|
+| `--level dft/sp` | the energies to use: `dft` (G of the DFT frequency jobs) or `sp` (E of the single points + [G - E(el)] of the DFT jobs; the default when `single_point.enabled`); see [Energies](energies.md#higher-level-single-points-optional) |
 | `--proton-transfers auto/path/steps` | which proton transfers the network search may make without a barrier, for this run only (default: `energies.proton_transfers`; see [Energies](energies.md#proton-transfers-without-a-barrier)) |
 
 ## map options

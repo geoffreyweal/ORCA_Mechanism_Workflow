@@ -82,6 +82,25 @@ Other solvents: change the dielectric constant and refractive index, or use ORCA
 `solvent_block: "%CPCM SMD true SMDSOLVENT \"WATER\" END"`, or `CPCM(Water)` on the method line with
 `solvent_block: ""`.
 
+## single_point
+
+An optional single point (SP) at a higher level on every optimised species and transition state, used by
+`collect` as G = E(SP) + [G - E(el)] of the DFT frequency job (see [Energies](energies.md#higher-level-single-points-optional)).
+
+```yaml
+single_point:
+  enabled: true
+  method: "!DLPNO-CCSD(T) def2-TZVPP def2-TZVPP/C TightPNO"
+  keywords: "!RIJCOSX def2/J TightSCF defgrid2"
+  block: ""            # extra input, e.g. a %MDCI block
+
+stage_overrides:
+  sp: {maxcore: 4000, mem_per_cpu: 5000MB}     # DLPNO-CCSD(T) needs more memory per core
+```
+
+The single points use the same `scf_block` and `solvent_block` as the DFT jobs, so the solvent model is the same.
+Their resources are those of the job kind `sp` (`stage_overrides.sp`). Off by default.
+
 ## resources, slurm and stage_overrides
 
 ```yaml
@@ -100,6 +119,7 @@ slurm:
 stage_overrides:                         # different settings for one kind of job
   optts: {time: "7-00:00", nprocs: 64}
   opt:   {time: "1-00:00"}
+  sp:    {maxcore: 4000, mem_per_cpu: 5000MB}   # the single points (single_point)
 ```
 
 Individual species (in `species:`) and steps (`resources:` in a step) can override these too.

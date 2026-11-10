@@ -17,7 +17,7 @@ from collections import Counter, OrderedDict
 import yaml
 
 from . import chem
-from .defaults import JOB_KINDS, PROTON_TRANSFER_MODES, deep_merge, default_settings
+from .defaults import DFT_KINDS, JOB_KINDS, PROTON_TRANSFER_MODES, deep_merge, default_settings
 
 PROJECT_FILE = "project.yaml"
 ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]*$")
@@ -243,7 +243,7 @@ class Project:
             raise ProjectError("%s must be a mapping of sections (project, orca, species, steps, ...)" % fn)
         self.raw = raw
         known = {"project", "orca", "resources", "slurm", "stage_overrides", "scan", "species", "steps",
-                 "mechanisms", "energies"}
+                 "mechanisms", "energies", "single_point"}
         for k in raw:
             if k not in known:
                 self.warnings.append("project.yaml: unknown section '%s' (ignored)" % k)
@@ -257,10 +257,14 @@ class Project:
 
     def _check_settings(self):
         o = self.settings["orca"]
-        for kind in JOB_KINDS:
+        for kind in DFT_KINDS:
             if not (o.get("keywords") or {}).get(kind):
                 self.errors.append("orca.keywords.%s is missing" % kind)
-        texts = [o.get("method", ""), o.get("scf_block", ""), o.get("solvent_block", "")]
+        sp = self.settings.get("single_point") or {}
+        if sp.get("enabled") and not str(sp.get("method") or "").strip():
+            self.errors.append("single_point.method is missing (single_point.enabled is true)")
+        texts = [o.get("method", ""), o.get("scf_block", ""), o.get("solvent_block", ""),
+                 sp.get("method", ""), sp.get("keywords", ""), sp.get("block", "")]
         texts += list((o.get("keywords") or {}).values()) + list((o.get("blocks") or {}).values())
         for t in texts:
             for ln in str(t or "").splitlines():

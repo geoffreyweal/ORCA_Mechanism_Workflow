@@ -8,7 +8,10 @@ from collections import Counter
 from . import chem, routes
 from .orca import parse_output
 from .project import expression
-from .workflow import HARTREE_KCAL, HARTREE_KJ, OPTTS, species_result, step_progress
+from .workflow import (HARTREE_KCAL, HARTREE_KJ, OPTTS, sp_enabled, sp_energy, species_result, species_sp_dir,
+                       step_progress, step_sp_dir)
+
+LEVELS = ("dft", "sp")
 
 R_KJ = 8.314462618e-3        # kJ / (mol K)
 KB_H = 2.083661912e10        # Boltzmann constant / Planck constant, 1 / (K s)
@@ -24,10 +27,19 @@ def eyring(en, barrier):
 
 
 class Energies:
-    """Gibbs free energies (Eh) of every species and transition state that has finished."""
+    """Gibbs free energies (Eh) of every species and transition state that has finished.
 
-    def __init__(self, project, queue=None):
+    level 'dft': G of the DFT frequency calculation. level 'sp' (the default when single_point.enabled):
+    G = E(single point, SP) + [G - E(el)] of the DFT frequency calculation, e.g. DLPNO-CCSD(T)//DFT; a species
+    or TS whose single point has not finished has no energy yet."""
+
+    level = "dft"
+
+    def __init__(self, project, queue=None, level=None):
         self.project = project
+        self.level = level or ("sp" if sp_enabled(project) else "dft")
+        if self.level not in LEVELS:
+            raise ValueError("level must be one of %s" % ", ".join(LEVELS))
         self.units = project.settings["energies"].get("units", "kJ/mol")
         self.factor = HARTREE_KCAL if "kcal" in self.units.lower() else HARTREE_KJ
         self.T = float(project.settings["energies"].get("temperature", 298.15))
@@ -39,18 +51,43 @@ class Energies:
         self.per_molecule = (R_KJ * self.T * math.log(0.0820573661 * self.T) / HARTREE_KJ
                              if self.standard_state == "1 M" else 0.0)
         self.species = {sid: species_result(project, sp, queue) for sid, sp in project.species.items()}
+        for sid, r in self.species.items():
+            r["sp_state"], r["e_sp"] = sp_energy(species_sp_dir(project, sid), queue)
+            r["g_used"] = self._combine(r["gibbs"] if r["ok"] else None, r["g_minus_eel"], r["e_sp"])
         self.steps = {}
         for sid, st in project.steps.items():
             stage, detail, _ = step_progress(project, st, queue)
             r3 = parse_output(os.path.join(project.step_dir(sid), OPTTS, "output.out"))
-            g = r3["gibbs"] if (r3["opt_converged"] and len(r3["imag"]) == 1) else None
-            self.steps[sid] = {"stage": stage, "detail": detail, "gibbs": g,
+            ts_ok = r3["opt_converged"] and len(r3["imag"]) == 1
+            sp_state, e_sp = sp_energy(step_sp_dir(project, sid), queue)
+            self.steps[sid] = {"stage": stage, "detail": detail, "gibbs_dft": r3["gibbs"] if ts_ok else None,
+                               "gibbs": self._combine(r3["gibbs"] if ts_ok else None, r3["g_minus_eel"], e_sp),
+                               "e_sp": e_sp, "sp_state": sp_state,
                                "imag": r3["imag"][0] if len(r3["imag"]) == 1 else None,
                                "validated": stage == "DONE"}
 
+    def _combine(self, g_dft, g_minus_eel, e_sp):
+        """the free energy used at this level (Eh), or None"""
+        if g_dft is None:
+            return None
+        if self.level == "dft":
+            return g_dft
+        if e_sp is None or g_minus_eel is None:
+            return None
+        return e_sp + g_minus_eel
+
+    @property
+    def level_text(self):
+        if self.level == "dft":
+            return "DFT free energies (%s)" % self.project.settings["orca"]["method"].lstrip("!").strip()
+        sp = self.project.settings.get("single_point") or {}
+        return ("E(%s) + [G - E(el)] of %s" % (str(sp.get("method", "")).lstrip("!").strip(),
+                                                self.project.settings["orca"]["method"].lstrip("!").strip()))
+
     def g_species(self, sid):
         r = self.species.get(sid)
-        return (r["gibbs"] + self.per_molecule) if r and r["ok"] and r["gibbs"] is not None else None
+        g = r.get("g_used", r.get("gibbs")) if r else None
+        return (g + self.per_molecule) if r and r["ok"] and g is not None else None
 
     def g_counter(self, counter):
         tot = 0.0
@@ -120,12 +157,13 @@ def deciding(rows_a, rows_b):
     return top(rows_a), top(rows_b), k
 
 
-def collect(project, mechs=None, outdir=None, queue=None, proton_transfers=None):
+def collect(project, mechs=None, outdir=None, queue=None, proton_transfers=None, level=None):
     """Write results/*.csv and results/summary.md; return the summary text.
 
-    `proton_transfers` ('auto', 'path' or 'steps') replaces energies.proton_transfers for the network search."""
+    `proton_transfers` ('auto', 'path' or 'steps') replaces energies.proton_transfers for the network search.
+    `level` ('dft' or 'sp') picks the energies (default: 'sp' when single_point.enabled, else 'dft')."""
     p = project
-    en = Energies(p, queue)
+    en = Energies(p, queue) if level is None else Energies(p, queue, level)
     outdir = outdir or p.path("results")
     os.makedirs(outdir, exist_ok=True)
     u = en.units
@@ -133,15 +171,18 @@ def collect(project, mechs=None, outdir=None, queue=None, proton_transfers=None)
 
     with open(os.path.join(outdir, "species.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["species", "role", "name", "formula", "charge", "mult", "Step1", "usable", "G_Eh", "E_el_Eh", "note"])
+        w.writerow(["species", "role", "name", "formula", "charge", "mult", "Step1", "usable", "G_Eh", "E_el_Eh",
+                    "G_minus_E_el_Eh", "SP", "E_SP_Eh", "G_used_Eh", "note"])
         for sid, sp in p.species.items():
             r = en.species[sid]
             w.writerow([sid, p.role(sid), sp.name, chem.formula_string(sp.formula), sp.charge, sp.mult, r["state"],
-                        r["ok"], _fmt(r["gibbs"], "%.8f"), _fmt(r["e_el"], "%.8f"), r["note"]])
+                        r["ok"], _fmt(r["gibbs"], "%.8f"), _fmt(r["e_el"], "%.8f"), _fmt(r.get("g_minus_eel"), "%.8f"),
+                        r.get("sp_state", ""), _fmt(r.get("e_sp"), "%.8f"), _fmt(r.get("g_used", r["gibbs"]), "%.8f"),
+                        r["note"]])
 
     with open(os.path.join(outdir, "steps.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["step", "TS", "name", "reaction", "stage", "imag_cm-1", "G_TS_Eh",
+        w.writerow(["step", "TS", "name", "reaction", "stage", "imag_cm-1", "G_TS_Eh", "E_SP_TS_Eh",
                     "dG_act_forward_" + u, "dG_act_reverse_" + u, "dG_reaction_" + u, "k_forward", "k_reverse",
                     "scan_start", "dG_act_from_start_" + u, "k_from_start_s-1", "used_by", "detail"])
         for sid, st in p.steps.items():
@@ -151,6 +192,7 @@ def collect(project, mechs=None, outdir=None, queue=None, proton_transfers=None)
             fwd, rev = en.rel(gts, gl), en.rel(gts, gr)
             from_start = en.rel(gts, en.g_species(st.start)) if st.start else None
             w.writerow([sid, st.ts, st.name, st.reaction_text(), e["stage"], _fmt(e["imag"]), _fmt(e["gibbs"], "%.8f"),
+                        _fmt(e.get("e_sp"), "%.8f"),
                         _fmt(fwd), _fmt(rev), _fmt(en.rel(gr, gl)), _fmt(eyring(en, fwd), "%.3g"),
                         _fmt(eyring(en, rev), "%.3g"), st.start or "", _fmt(from_start),
                         _fmt(eyring(en, from_start), "%.3g"), " ".join(st.used_by), e["detail"]])
@@ -188,7 +230,8 @@ def collect(project, mechs=None, outdir=None, queue=None, proton_transfers=None)
     L = ["# Results: %s" % (p.settings["project"].get("title") or p.name), "",
          "Gibbs free energies in %s relative to %s (G = 0), at %.2f K, standard state %s." % (
              u, expression(p.reference), en.T, en.standard_state),
-         "Each state is balanced with %s where needed." % (", ".join(p.auto_species) or "nothing"), ""]
+         "Each state is balanced with %s where needed." % (", ".join(p.auto_species) or "nothing"),
+         "Energies: %s." % en.level_text, ""]
     L += ["## Mechanisms", "",
           "| mechanism | product | highest TS | G(highest TS) | rate-limiting TS | effective barrier | all steps validated |",
           "|---|---|---|---|---|---|---|"]

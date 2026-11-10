@@ -35,12 +35,18 @@ def _block(text):
 
 
 def render_input(settings, kind, xyzfile, charge, mult, scan=None, overrides=None):
-    """Text of orca.inp for a job of kind 'opt' | 'scan' | 'optts' | 'irc'.
+    """Text of orca.inp for a job of kind 'opt' | 'scan' | 'optts' | 'irc' | 'sp'.
 
+    'sp' is the Step 5 single point: the method and keywords of settings['single_point'] instead of orca.method
+    and orca.keywords, with the same SCF and solvent blocks.
     scan = (i, j, first, last, npoints) with 0-based atom numbers, as ORCA expects."""
     o = settings["orca"]
     res, _ = job_settings(settings, kind, overrides)
-    out = [o["method"].rstrip(), o["keywords"][kind].rstrip()]
+    if kind == "sp":
+        sp = settings.get("single_point") or {}
+        out = [x.rstrip() for x in (sp.get("method") or "", sp.get("keywords") or "") if str(x).strip()]
+    else:
+        out = [o["method"].rstrip(), o["keywords"][kind].rstrip()]
     for blk in (o.get("scf_block"), o.get("solvent_block")):
         if _block(blk):
             out.append(_block(blk))
@@ -53,7 +59,7 @@ def render_input(settings, kind, xyzfile, charge, mult, scan=None, overrides=Non
             out.append("    MaxIter %s   # optimisation cycles allowed per SCAN point" % o["scan_maxiter"])
         out.append("    SCAN B %d %d = %.3f, %.3f, %d END" % (i, j, d0, d1, n))
         out.append("END")
-    extra = (o.get("blocks") or {}).get(kind)
+    extra = (settings.get("single_point") or {}).get("block") if kind == "sp" else (o.get("blocks") or {}).get(kind)
     if _block(extra):
         out.append(_block(extra))
     out.append("* xyzfile %d %d %s" % (charge, mult, xyzfile))
@@ -142,6 +148,9 @@ def parse_output(path):
     r["gibbs"] = float(g[-1]) if g else None
     e = re.findall(r"FINAL SINGLE POINT ENERGY\s+(-?\d+\.\d+)", txt)
     r["e_el"] = float(e[-1]) if e else None
+    # thermal correction of a frequency job: G minus the electronic energy (for G = E(single point) + this)
+    c = re.findall(r"G-E\(el\)\s+\.\.\.\s+(-?\d+\.\d+)", txt)
+    r["g_minus_eel"] = float(c[-1]) if c else None
     freqs, imag = [], []
     idx = txt.rfind("VIBRATIONAL FREQUENCIES")
     if idx >= 0:

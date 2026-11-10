@@ -31,7 +31,13 @@ calcs/
         Step4A_IRC/                   orca.inp  submit.sl  TS.xyz  (orca_IRC_F.xyz, orca_IRC_B.xyz)
         Step4B_Validate/Forwards/     orca.inp  submit.sl  orca_IRC_F.xyz
         Step4B_Validate/Backwards/    orca.inp  submit.sl  orca_IRC_B.xyz
+        SP_Single_Point/              orca.inp  submit.sl  opt_structure.xyz   (single point of the TS)
+    Species/R1/SP_Single_Point/       orca.inp  submit.sl  opt_structure.xyz   (single point of the species)
 ```
+
+The `SP_Single_Point` folders appear only with `single_point.enabled: true`: `next` writes the single point of
+a species as soon as its Step 1 is usable, and that of a transition state as soon as its OptTS has exactly one
+imaginary frequency (it does not wait for the IRC). `status` counts them under SINGLE POINTS.
 
 Every job folder also has a small `.mechflow.json` (what the job is) and, once submitted, `.submitted`
 (the Slurm job id).

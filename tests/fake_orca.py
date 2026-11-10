@@ -14,6 +14,15 @@ from mechflow.orca import META, job_state
 from mechflow.project import Project
 
 
+SP_SHIFT = -0.02      # a single point (SP) lies this far below the DFT electronic energy (Eh)
+
+
+def sp_text(E):
+    """output of a single point: only the final energy"""
+    return ("FINAL SINGLE POINT ENERGY     %.12f\n" % E +
+            "\n                             ****ORCA TERMINATED NORMALLY****\n")
+
+
 def out_text(G, imag=None, opt=True, irc=0, term=True, scan_steps=0):
     t = "                         Program Version 6.1.0-f.0  -   RELEASE   -\n"
     t += "".join("         *               RELAXED SURFACE SCAN STEP %3d               *\n" % (k + 1)
@@ -31,6 +40,8 @@ def out_text(G, imag=None, opt=True, irc=0, term=True, scan_steps=0):
     for k in range(7, 12):
         t += "   %2d:     %6.2f cm**-1\n" % (k, 30.0 + 10 * k)
     t += "\nFinal Gibbs free energy         ...  %.8f Eh\n" % G
+    t += "For completeness - the Gibbs free energy minus the electronic energy\n"
+    t += "G-E(el)                           ...      %.8f Eh     %.2f kcal/mol\n" % (0.1, 0.1 * 627.5095)
     if term:
         t += "\n                             ****ORCA TERMINATED NORMALLY****\n"
     return t
@@ -107,6 +118,15 @@ def finish_ready_jobs(root, die_after=None, ts_height=0.03):
             _write_mol(os.path.join(folder, "orca.xyz"), mol, "Coordinates from ORCA-job orca")
             g = sum(pseudo_gibbs(project.species[s].mol, project.species[s].charge) * c for s, c in st.left.items())
             _w(os.path.join(folder, "output.out"), out_text(g + ts_height, imag=-350.0))
+        elif kind == "sp":
+            # the structure's DFT electronic energy (G - 0.1 in out_text) plus SP_SHIFT
+            if meta.get("stage") == "SP" and item in project.steps:
+                st = project.steps[item]
+                g = sum(pseudo_gibbs(project.species[s].mol, project.species[s].charge) * c for s, c in st.left.items())
+                e = g + ts_height - 0.1 + SP_SHIFT
+            else:
+                e = pseudo_gibbs(mol, q) - 0.1 + SP_SHIFT
+            _w(os.path.join(folder, "output.out"), sp_text(e))
         elif kind == "irc":
             st = project.steps[item]
             sd = project.step_dir(item)
