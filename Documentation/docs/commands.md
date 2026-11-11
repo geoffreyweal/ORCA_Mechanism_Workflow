@@ -10,14 +10,16 @@ Run every command inside a project folder (or any folder below it), or give `-p 
 | `mechflow next` | writes every input that can be written now |
 | `mechflow next S5 --image 57 [--force]` | OptTS of step S5 from SCAN point 57 instead of the automatic choice |
 | `mechflow next --refresh` | first rewrites prepared, unsubmitted inputs from the current settings |
-| `mechflow submit` | writes `submit_ready.sh`, which submits every prepared job and records its job id |
-| `mechflow submit --run` | calls `sbatch` straight away |
+| `mechflow submit` | submits every prepared job (`sbatch`) and records its job id in the job's folder |
+| `mechflow submit --dry-run` | lists the jobs that would be submitted, without submitting them |
 | `mechflow submit --local` | writes `run_ready.sh` to run the jobs here without Slurm |
+| `mechflow reset` | sets every failed job up to run again; the old files go into `failed_attempts/` ([details](cluster.md#when-jobs-fail)) |
+| `mechflow reset S5 --stage OptTS --redo-done --from-scratch --downstream` | redoes the OptTS of S5 (and everything after it) from the beginning |
 | `mechflow submit --limit 50` | at most 50 jobs |
 | `mechflow status [--brief]` | the state of every species and step; `--brief` hides finished ones |
 | `mechflow check FOLDER` | the procedure's checks on any ORCA job folder |
 | `mechflow scan-profile S5` | the SCAN energy profile of a step, with the TS guess marked |
-| `mechflow restart-scan S5` | restarts a SCAN that stopped |
+| `mechflow restart-scan S5` | restarts a SCAN that stopped (`mechflow reset` does this too) |
 | `mechflow accept ID ...` | accepts a species' Step 1 structure, or a step's Step 4B result, that was flagged CHECK |
 | `mechflow collect` | Step 5: energies, profiles, product ratios and the best routes through the whole network → `results/` |
 | `mechflow map` | network maps → `maps/` |

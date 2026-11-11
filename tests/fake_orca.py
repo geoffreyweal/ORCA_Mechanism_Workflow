@@ -1,7 +1,7 @@
 """Fabricate ORCA outputs so the workflow can be tested without ORCA (a test helper only).
 
 finish_ready_jobs(root) writes output.out (and the xyz files ORCA would write) for every job
-folder under calcs/ that mechflow has prepared but that has not run yet.
+folder under calcs/ that mechflow has prepared (or submitted) but that has not run yet.
 """
 import glob
 import hashlib
@@ -83,7 +83,7 @@ def finish_ready_jobs(root, die_after=None, ts_height=0.03):
     n = 0
     for meta_path in sorted(glob.glob(os.path.join(root, "calcs", "**", META), recursive=True)):
         folder = os.path.dirname(meta_path)
-        if job_state(folder) != "ready":
+        if job_state(folder) not in ("ready", "submitted"):
             continue
         meta = json.load(open(meta_path))
         kind, item = meta["kind"], meta.get("item")

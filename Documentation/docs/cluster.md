@@ -1,29 +1,26 @@
 # Running on a Slurm cluster
 
 mechflow is made for clusters that use Slurm (such as Mahuika). It does not submit anything by itself:
-`mechflow submit` writes a script that you run.
+`mechflow submit` submits the jobs that `mechflow next` has prepared.
 
 ## The loop
 
 ```bash
 cd ~/projects/my_reaction           # the folder with project.yaml
 mechflow next                       # write every input that can be written now
-mechflow submit                     # write submit_ready.sh
-bash submit_ready.sh                # submit; each job's id goes into its folder (.submitted)
+mechflow submit                     # submit them; each job's id goes into its folder (.submitted)
 # ... later ...
 mechflow status --brief             # what is running, what failed, what is ready
 mechflow next                       # next stages for whatever finished
-mechflow submit && bash submit_ready.sh
+mechflow submit
 ```
 
-`submit_ready.sh` holds one line per job:
-
-```bash
-( cd "calcs/Steps/S5a/Step3_Opt_TS" && jid=$(sbatch --parsable submit.sl) && echo "$jid" > .submitted && echo "submitted $jid calcs/Steps/S5a/Step3_Opt_TS" )
-```
-
-`mechflow submit --run` does the same without the script. `--limit 50` submits at most 50 jobs, if your
-cluster limits the number of queued jobs.
+`mechflow submit` runs `sbatch submit.sl` in each prepared job's folder and writes the job id into its
+`.submitted` file. That file is made before `sbatch` runs (and removed again if `sbatch` refuses the job), so
+a job is never submitted twice, even by two `mechflow submit` commands at once. A job that `sbatch` refuses
+is listed with `sbatch`'s message and stays ready to submit. `mechflow submit --dry-run` lists the jobs
+without submitting them, and `--limit 50` submits at most 50 jobs, if your cluster limits the number of
+queued jobs.
 
 ## How mechflow knows a job's state
 
@@ -53,11 +50,42 @@ Small species can use fewer cores (`P2: {name: water, nprocs: 4}` in `species:`)
     `Recalc_Hess 1` recalculates the numerical Hessian at every OptTS cycle. That is the most expensive
     part of the procedure. `Recalc_Hess 5` in `orca.blocks.optts` is a common compromise.
 
-## Time limits and restarts
+## When jobs fail
 
-- **SCAN:** `mechflow restart-scan S5` (see [the workflow stages](workflow.md#restarting-a-scan)).
-- **Other stages:** rename or delete the stage folder and run `mechflow next`. It writes the stage again
-  from the previous stage's result. For a longer time limit, set `stage_overrides` first.
+`mechflow status` counts the failed jobs and says why each one stopped, when it can tell (time limit, out of
+memory, cancelled, an ORCA error). `mechflow reset` sets them up to run again, and `mechflow submit` submits
+them:
+
+```bash
+mechflow reset --dry-run      # what it would do
+mechflow reset                # every failed job
+mechflow submit
+```
+
+Nothing is deleted: the files of each attempt move into `failed_attempts/<date>/` inside the job's folder.
+
+| stage | the next attempt |
+|---|---|
+| Step 1, OptTS, Forwards, Backwards | restarts from the last geometry of the attempt (`last_geometry_restart.xyz`) |
+| SCAN | a new part from the last converged point, as in the procedure (see [restarting a SCAN](workflow.md#restarting-a-scan)) |
+| IRC, single points | runs again from the same structure |
+
+The inputs are written again from the current `project.yaml`, so a longer time limit or more memory set
+there (for example in `stage_overrides`) applies to the next attempt. Jobs that are queued or running in
+Slurm are never touched. Other options:
+
+| option | what it does |
+|---|---|
+| `mechflow reset I5a S7` | only these species and steps (S7 includes S7a and S7b) |
+| `--stage OptTS` | only these stages: Step1, SP, SCAN, OptTS, IRC, Fwd, Bwd |
+| `--from-scratch` | start the stage again from the beginning: `mechflow next` writes it again from the previous stage's result |
+| `--redo-done` | also redo jobs that finished (only for jobs you name) |
+| `--downstream` | also reset, from scratch, the later stages that used their results |
+| `--force` | also reset submitted jobs whose state is unknown because `squeue` could not be asked |
+
+For example, `mechflow reset S5a --stage OptTS --redo-done --from-scratch --downstream` throws away the TS
+of S5a and everything after it; `mechflow next` then writes the OptTS again from the SCAN maximum (or
+`mechflow next S5a --image 57` from another SCAN point).
 
 ## Working on a laptop and the cluster
 

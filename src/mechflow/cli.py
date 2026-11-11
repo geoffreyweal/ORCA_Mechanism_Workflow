@@ -3,7 +3,8 @@
     mechflow init                  write project.yaml for the xyz files in species/
     mechflow validate              check the project, write overview.md
     mechflow next                  write every input that can be written now (Step 1 ... Step 4B, single points)
-    mechflow submit                write submit_ready.sh for the prepared jobs (--run: sbatch now)
+    mechflow submit                submit every prepared job (sbatch; --dry-run lists them first)
+    mechflow reset                 set failed jobs up to run again (old files kept in failed_attempts/)
     mechflow status                where every species and step is up to
     mechflow collect               Step 5: energies, profiles, product ratios -> results/
     mechflow map                   network maps (Graphviz / Mermaid) -> maps/
@@ -14,13 +15,15 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from collections import Counter
 
 from . import __version__, chem, network
+from . import reset as resets
 from .defaults import PROTON_TRANSFER_MODES, SETTINGS_YAML
 from .energies import Energies, collect
 from .orca import SUBMITTED, Queue, job_state, parse_output, slurm_problem
-from .project import PROJECT_FILE, Project, ProjectError, expression, find_project, species_sort_key
+from .project import PROJECT_FILE, Project, ProjectError, expression, find_project, match_any, species_sort_key
 from .report import overview, plural
 from .workflow import (ACCEPTED, VALIDATE, job_folders, prepare, refresh, restart_scan, retire, scan_maximum,
                        scan_points, scan_profile_text, sp_enabled, sp_setup, species_result, species_setup,
@@ -206,6 +209,10 @@ def cmd_status(args):
     print("\nSpecies: %s\nSteps:   %s" % (sp_c or "-", st_c or "-"))
     if counts.get("species absent"):
         print("(%d species have no Step 1 input yet: run 'mechflow next')" % counts["species absent"])
+    failed = resets.plan(p, resets.select_jobs(p, [] if args.steps_only else species, steps), q)[0]
+    if failed:
+        print("%d failed job(s): 'mechflow reset' sets them up to run again, then 'mechflow submit' "
+              "('mechflow reset --dry-run' shows what it would do)." % len(failed))
 
 
 def cmd_next(args):
@@ -263,6 +270,34 @@ def cmd_next(args):
           if (n_sp or n_st or n_sp_jobs) else "\nNothing new to prepare (see 'mechflow status').")
 
 
+def _submit_once(folder):
+    """sbatch one prepared job. The .submitted file is made (atomically) before sbatch runs, so a job is never
+    submitted twice, even by two mechflow commands at once; it is removed again if sbatch fails.
+    Returns (True, job id) or (False, why)."""
+    marker = os.path.join(folder, SUBMITTED)
+    try:
+        fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False, "already submitted (see its .submitted file)"
+    os.close(fd)
+    try:
+        res = subprocess.run(["sbatch", "--parsable", "submit.sl"], cwd=folder, capture_output=True, text=True,
+                             timeout=300)
+    except FileNotFoundError:
+        os.remove(marker)
+        return False, "sbatch not found: run mechflow submit on the cluster (or use --local to run the jobs here)"
+    except (OSError, subprocess.SubprocessError) as exc:
+        os.remove(marker)
+        return False, "sbatch could not be run: %s" % exc
+    jid = res.stdout.strip().split(";")[0]
+    if res.returncode != 0 or not jid.isdigit():
+        os.remove(marker)
+        return False, "sbatch: %s" % (res.stderr.strip() or res.stdout.strip() or "exit code %d" % res.returncode)
+    with open(marker, "w") as fh:
+        fh.write(jid + "\n")
+    return True, jid
+
+
 def cmd_submit(args):
     p = _load(args)
     species, steps, _ = _select(p, args)
@@ -273,16 +308,10 @@ def cmd_submit(args):
     if not ready:
         print("No prepared jobs waiting to be submitted (run 'mechflow next' first?).")
         return
-    if args.run:
+    if args.dry_run:
         for f in ready:
-            res = subprocess.run(["sbatch", "--parsable", "submit.sl"], cwd=f, capture_output=True, text=True)
-            if res.returncode == 0:
-                jid = res.stdout.strip().split(";")[0]
-                with open(os.path.join(f, SUBMITTED), "w") as fh:
-                    fh.write(jid + "\n")
-                print("submitted %-10s %s" % (jid, _rel(p, f)))
-            else:
-                print("FAILED to submit %s: %s" % (_rel(p, f), res.stderr.strip()))
+            print("would submit  %s" % _rel(p, f))
+        print("\n%d job(s) would be submitted (dry run: nothing was submitted)." % len(ready))
         return
     if args.local:
         path = p.path("run_ready.sh")
@@ -297,16 +326,74 @@ def cmd_submit(args):
         os.chmod(path, 0o755)
         print("Wrote %s with %d job(s). Run it with:  bash run_ready.sh" % (_rel(p, path), len(ready)))
         return
-    path = p.path("submit_ready.sh")
-    with open(path, "w") as fh:
-        fh.write("#!/bin/bash\n# %d prepared job(s). Written by 'mechflow submit'. Run it from %s\nset -u\n"
-                 % (len(ready), p.root))
-        for f in ready:
-            rel = _rel(p, f)
-            fh.write('( cd "%s" && jid=$(sbatch --parsable submit.sl) && echo "$jid" > %s && echo "submitted $jid %s" )\n'
-                     % (rel, SUBMITTED, rel))
-    os.chmod(path, 0o755)
-    print("Wrote %s with %d job(s). Submit them with:  bash submit_ready.sh" % (_rel(p, path), len(ready)))
+    n = failed = 0
+    for f in ready:
+        ok, msg = _submit_once(f)
+        if ok:
+            n += 1
+            print("submitted %-10s %s" % (msg, _rel(p, f)))
+            continue
+        if msg.startswith("sbatch not found"):
+            _die(msg)
+        failed += 1
+        print("NOT submitted %s: %s" % (_rel(p, f), msg))
+    print("\nSubmitted %d job(s).%s 'mechflow status' shows how they are doing." % (
+        n, (" %d could not be submitted (see above)." % failed) if failed else ""))
+
+
+def cmd_reset(args):
+    p = _load(args, strict=False)
+    try:
+        stages = resets.parse_stages(args.stage) if args.stage else None
+    except ValueError as exc:
+        _die(str(exc))
+    filtered = bool(args.mech or args.product or args.step or args.species)
+    if args.redo_done and not (args.ids or filtered):
+        _die("--redo-done also resets jobs that finished, so name them: species or step IDs (or --species, --step, "
+             "--mech or --product)")
+    if args.ids:
+        species, steps = [], []
+        for ident in args.ids:
+            sps = [sp for sid, sp in p.species.items() if match_any(sid, ident)]
+            sts = [st for sid, st in p.steps.items() if match_any(sid, ident)]
+            if not sps and not sts:
+                _die("'%s' is not a species or step ID" % ident)
+            species += [x for x in sps if x not in species]
+            steps += [x for x in sts if x not in steps]
+    else:
+        species, steps, _ = _select(p, args)
+    q = Queue(enabled=not args.no_squeue)
+    actions, notes = resets.plan(p, resets.select_jobs(p, species, steps, stages), q, redo_done=args.redo_done,
+                                 from_scratch=args.from_scratch, downstream_too=args.downstream, force=args.force,
+                                 named=bool(args.ids or filtered or stages), stages=stages)
+    stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    n, scratch = 0, False
+    for job, how, why in actions:
+        if args.dry_run:
+            what = resets.describe(job, how)
+        else:
+            try:
+                dest, what = resets.apply(p, job, how, stamp)
+            except (OSError, ValueError) as exc:
+                print("%-7s %-6s %-28s NOT reset: %s" % (job.item, job.stage, why, exc))
+                continue
+            if dest:
+                what += "   [its files: %s]" % _rel(p, dest)
+        n += 1
+        scratch = scratch or how == "scratch"
+        print("%-7s %-6s %-28s -> %s" % (job.item, job.stage, why, what))
+    for note in notes:
+        print("note: " + note)
+    if not actions:
+        print("Nothing to reset%s." % ("" if args.redo_done else
+                                       " (only failed jobs are reset: add --redo-done, with IDs, to redo finished ones)"))
+        return
+    if args.dry_run:
+        print("\n%d job(s) would be reset (dry run: nothing was changed)." % n)
+        return
+    print("\nReset %d job(s). The files of the earlier attempts are in failed_attempts/ in each job's folder." % n)
+    print("Next: %s" % ("'mechflow next' (it writes the stages that start from scratch), then 'mechflow submit'."
+                        if scratch else "'mechflow submit'."))
 
 
 def cmd_check(args):
@@ -499,13 +586,36 @@ def build_parser():
                    help="first rewrite prepared (not yet submitted) inputs from the current settings")
     q.set_defaults(func=cmd_next)
 
-    q = sub.add_parser("submit", help="submit prepared jobs (writes submit_ready.sh unless --run)")
+    q = sub.add_parser("submit", help="submit every prepared job (sbatch)")
     filters(q)
     squeue_flag(q)
-    q.add_argument("--run", action="store_true", help="call sbatch now")
+    q.add_argument("--dry-run", "--dry_run", dest="dry_run", action="store_true",
+                   help="list the jobs that would be submitted, without submitting anything")
+    q.add_argument("--run", action="store_true", help=argparse.SUPPRESS)   # submit used to need it; now a no-op
     q.add_argument("--local", action="store_true", help="write run_ready.sh to run the jobs here without Slurm")
     q.add_argument("--limit", type=int, help="at most this many jobs")
     q.set_defaults(func=cmd_submit)
+
+    q = sub.add_parser("reset", help="set failed jobs up to run again (old files kept in failed_attempts/)",
+                       description=resets.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    q.add_argument("ids", nargs="*", help="species or step IDs (S5 includes S5a and S5b); default: every failed job")
+    filters(q)
+    squeue_flag(q)
+    q.add_argument("--stage", help="only these stages, comma separated: Step1, SP, SCAN, OptTS, IRC, Fwd, Bwd "
+                                   "(4B = Fwd and Bwd)")
+    q.add_argument("--from-scratch", "--from_scratch", dest="from_scratch", action="store_true",
+                   help="start the stages again from the beginning: 'mechflow next' writes them again from the "
+                        "previous stage's result")
+    q.add_argument("--downstream", action="store_true",
+                   help="also reset, from scratch, the later stages that used the results of the jobs reset")
+    q.add_argument("--redo-done", "--redo_done", dest="redo_done", action="store_true",
+                   help="also reset jobs that finished (only with IDs or --species / --step / --mech / --product)")
+    q.add_argument("--force", action="store_true",
+                   help="also reset submitted jobs whose state is unknown because squeue could not be asked "
+                        "(make sure they are not running)")
+    q.add_argument("--dry-run", "--dry_run", dest="dry_run", action="store_true",
+                   help="show what would be reset, without changing anything")
+    q.set_defaults(func=cmd_reset)
 
     q = sub.add_parser("check", help="the procedure's checks on one ORCA job folder")
     q.add_argument("folder")

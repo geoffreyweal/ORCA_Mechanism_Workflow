@@ -28,6 +28,7 @@ IRC = "Step4A_IRC"
 VALIDATE = "Step4B_Validate"
 SP = "SP_Single_Point"
 ACCEPTED = ".accepted"       # written by 'mechflow accept'
+ATTEMPTS = "failed_attempts"   # 'mechflow reset' keeps the files of earlier attempts of a job here
 
 
 def jobname(project, item, stage):
@@ -87,7 +88,8 @@ def species_setup(project, sp, queue=None):
         return "Step 1 input updated (the species xyz, charge or multiplicity changed)", False
     if state != "ready" and (changed or q_changed):
         return ("species/%s.xyz (or its charge / multiplicity) changed after its Step 1 job was submitted: "
-                "delete calcs/Species/%s to start that species again" % (sp.id, sp.id)), True
+                "'mechflow reset %s --redo-done --from-scratch --downstream' starts that species again from it"
+                % (sp.id, sp.id)), True
     return None, False
 
 
@@ -277,7 +279,8 @@ def step_progress(project, st, queue=None):
         k = scan_maximum(pts)
         if k is None:
             note = "no energy maximum in %d SCAN point(s)" % len(pts)
-            note += ("; the SCAN stopped early: try 'mechflow restart-scan %s'" % st.id) if s2 == "failed" else \
+            note += ("; the SCAN stopped early: 'mechflow reset %s' runs it on from its last point" % st.id) \
+                if s2 == "failed" else \
                 " - barrierless here, or scan further / another distance"
             return "SCAN", note, None
         note = "maximum at image %d (d = %.3f A)" % (pts[k]["image"], pts[k]["d"])
@@ -303,10 +306,12 @@ def step_progress(project, st, queue=None):
         return "IRC", "failed: no IRC end points written (%s)" % (slurm_problem(t4a) or "see output.out"), None
     fw, bw = os.path.join(sd, VALIDATE, "Forwards"), os.path.join(sd, VALIDATE, "Backwards")
     sf, sb = job_state(fw, queue), job_state(bw, queue)
-    if sf == "absent" and sb == "absent":
+    if sf == "absent" or sb == "absent":
         r4 = parse_output(os.path.join(t4a, "output.out"))
         note = "IRC converged in both directions" if r4["irc_converged"] >= 2 else \
             "IRC finished (%d of 2 directions converged)" % r4["irc_converged"]
+        if sf != sb:
+            note += "; %s to write again" % ("Forwards" if sf == "absent" else "Backwards")
         return "Fwd/Bwd", note, "prepare_4b"
     if sf != "finished" or sb != "finished":
         return "Fwd/Bwd", "Forwards %s, Backwards %s" % (sf, sb), None
@@ -433,13 +438,19 @@ def prepare(project, st, action, image=None):
                   overrides=st.overrides, info={"item": st.id, "stage": "IRC"})
         return "IRC from the optimised %s" % st.ts
     if action == "prepare_4b":
+        written = []
         for side, f, short in (("Forwards", "orca_IRC_F.xyz", "Fwd"), ("Backwards", "orca_IRC_B.xyz", "Bwd")):
             folder = os.path.join(sd, VALIDATE, side)
+            if os.path.isfile(os.path.join(folder, "orca.inp")):
+                continue                    # this side is there already (only the other one was reset)
+            written.append(side)
             os.makedirs(folder, exist_ok=True)
             shutil.copy(os.path.join(sd, IRC, f), os.path.join(folder, f))
             write_job(folder, project.settings, "opt", f, st.charge, st.mult, jobname(project, st.id, short),
                       overrides=st.overrides, info={"item": st.id, "stage": short})
-        return "Forwards and Backwards optimisations from the IRC end points"
+        if len(written) == 2:
+            return "Forwards and Backwards optimisations from the IRC end points"
+        return "%s optimisation from its IRC end point" % " ".join(written)
     raise ValueError("unknown action %s" % action)
 
 
@@ -483,14 +494,15 @@ def restart_scan(project, st):
         first = os.path.join(base, "SCAN_1")
         os.makedirs(first)
         for f in os.listdir(base):
-            if f != "SCAN_1":
+            if f not in ("SCAN_1", ATTEMPTS):
                 shutil.move(os.path.join(base, f), os.path.join(first, f))
         subs = [first]
     last = sorted(subs, key=lambda p: int(re.findall(r"SCAN_(\d+)$", p)[0]))[-1]
     k = int(re.findall(r"SCAN_(\d+)$", last)[0])
     imgs = sorted(glob.glob(os.path.join(last, "orca.[0-9][0-9][0-9].xyz")))
     if not imgs:
-        raise ValueError("no converged SCAN point in %s: delete the SCAN folder and run 'mechflow next' to start again" % last)
+        raise ValueError("no converged SCAN point in %s: 'mechflow reset %s' runs it again as it was "
+                         "(--from-scratch starts the SCAN again)" % (last, st.id))
     m = re.search(r"SCAN B\s+\d+\s+\d+\s*=\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*(\d+)", read_text(os.path.join(last, "orca.inp")))
     if not m:
         raise ValueError("cannot read the SCAN line of %s/orca.inp" % last)

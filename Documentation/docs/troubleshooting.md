@@ -26,11 +26,12 @@ together.
 **No energy maximum.**
 `mechflow scan-profile S5` shows the profile. Either the step is barrierless in this model (common for
 ions combining), or the SCAN did not go far enough (increase `scan.to`), or another distance describes
-the reaction better. Delete `Step2Ba_SCAN` after changing the step, then run `mechflow next`.
+the reaction better. After changing the step, `mechflow reset S5 --stage SCAN --redo-done --from-scratch`
+and `mechflow next` start the SCAN again.
 
 **The SCAN stopped before the end.**
-`mechflow restart-scan S5`. If it stopped after passing a maximum, `next` already offers OptTS from the
-points it has.
+`mechflow reset S5` (the procedure's restart, from the last converged point). If it stopped after passing a
+maximum, `next` already offers OptTS from the points it has.
 
 **The automatic TS guess is not the one I want.**
 `mechflow next S5 --image 57 --force` (the image numbers are in `scan-profile`).
@@ -54,8 +55,8 @@ two other structures.
 
 **I changed project.yaml but the inputs did not change.**
 Inputs that already exist are never rewritten by `next`. Use `mechflow next --refresh` for prepared jobs that
-have not been submitted. For jobs that have run, delete their folders and run `next` (and remember that all
-calculations must use the same settings).
+have not been submitted. A job reset with `mechflow reset` is written again from the current settings (and
+remember that all calculations must use the same method, basis set and solvent).
 
 **A comment in my settings breaks the ORCA input.**
 ORCA ends a comment at a second `#` on the same line. Keep to one `#` per line; `mechflow validate`

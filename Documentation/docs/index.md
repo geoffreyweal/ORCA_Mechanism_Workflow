@@ -35,7 +35,8 @@ flowchart LR
 | Step 5 | Gibbs energy profiles of every mechanism, barriers, and predicted product ratios |
 | maps | network maps (Graphviz and Mermaid), optionally coloured by progress |
 
-It never submits anything unless you ask it to. `mechflow submit` writes a `submit_ready.sh` for you to run.
+It never submits anything unless you ask it to: `mechflow submit` submits the prepared jobs
+(`mechflow submit --dry-run` lists them first).
 
 ## Names
 
@@ -60,8 +61,7 @@ mechflow init          # project.yaml for the xyz files in species/
 #   ... add the steps and mechanisms to project.yaml ...
 mechflow validate      # checks everything, writes overview.md
 mechflow next          # writes every input that can be written now
-mechflow submit        # writes submit_ready.sh
-bash submit_ready.sh
+mechflow submit        # submits every prepared job
 #   ... jobs finish ...
 mechflow next          # checks the finished stages, writes the next inputs
 mechflow submit

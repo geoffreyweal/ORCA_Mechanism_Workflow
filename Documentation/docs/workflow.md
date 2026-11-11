@@ -61,8 +61,8 @@ These are your decisions, as in the procedure, and mechflow points them out:
 
 | status message | what to do |
 |---|---|
-| `no energy maximum` | The SCAN is barrierless, or did not go far enough. Look at it with `mechflow scan-profile S5`. Then change `scan.to` or the atoms, delete `Step2Ba_SCAN`, and run `next` again |
-| `the SCAN stopped early` | `mechflow restart-scan S5`: the procedure's restart (see below) |
+| `no energy maximum` | The SCAN is barrierless, or did not go far enough. Look at it with `mechflow scan-profile S5`. Then change `scan.to` or the atoms and run `mechflow reset S5 --stage SCAN --redo-done --from-scratch`, then `next` |
+| `the SCAN stopped early` | `mechflow reset S5`: the procedure's restart (see below) |
 | the wrong SCAN point chosen | `mechflow next S5 --image 57 --force`. The old OptTS folder is kept as `Step3_Opt_TS_old1` |
 | `2 imaginary frequencies` | Look at the modes; restart OptTS from a better point (`--image`) or from the displaced structure |
 | `CHECK` after Step 4B | The TS does not connect the two sides of the reaction you wrote. Look at both ends (`viewORCA opt`). If the result is right, run `mechflow accept S5`; if not, the step needs another SCAN coordinate |
@@ -70,7 +70,8 @@ These are your decisions, as in the procedure, and mechflow points them out:
 
 ## Restarting a SCAN
 
-When a SCAN runs out of time, `mechflow restart-scan S5` follows the procedure's restart instructions:
+When a SCAN runs out of time, `mechflow reset S5` (or `mechflow restart-scan S5`) follows the procedure's
+restart instructions:
 
 1. The SCAN files move into `Step2Ba_SCAN/SCAN_1`.
 2. `SCAN_2` starts from the last converged SCAN point (`last_converged_SCAN_image_restart.xyz`).
@@ -83,5 +84,6 @@ All `SCAN_n` parts are read together when looking for the maximum, so nothing el
 - Inputs already written are not changed when you edit `project.yaml`.
 - `mechflow next --refresh` rewrites the inputs of jobs that have been prepared but not yet submitted.
 - If you edit a species' xyz file before its Step 1 job is submitted, `next` picks up the change. After
-  that, delete `calcs/Species/<ID>` to start the species again.
-- To redo a stage, delete (or rename) its folder and run `mechflow next`.
+  that, `mechflow reset <ID> --redo-done --from-scratch --downstream` starts the species again.
+- To redo a stage, `mechflow reset` it (see [when jobs fail](cluster.md#when-jobs-fail)) and run
+  `mechflow next`.

@@ -26,7 +26,8 @@ cd my_reaction          # contains species/*.xyz
 mechflow init           # writes project.yaml; add your steps and mechanisms
 mechflow validate       # checks everything, writes overview.md
 mechflow next           # writes every input that can be written now
-mechflow submit         # writes submit_ready.sh  ->  bash submit_ready.sh
+mechflow submit         # submits every prepared job (--dry-run: only list them)
+mechflow reset          # failed jobs: set them up to run again (old files kept in failed_attempts/)
 # ... repeat  next / submit  until 'mechflow status' says DONE ...
 mechflow collect        # energies, profiles, product ratios -> results/
 mechflow map --status   # network map -> maps/

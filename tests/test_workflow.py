@@ -3,6 +3,7 @@ import glob
 import os
 
 import fake_orca
+import pytest
 from mechflow.cli import main
 from mechflow.orca import job_state
 from mechflow.project import Project
@@ -18,13 +19,26 @@ def stage(root):
     return step_progress(p, p.steps["S1"])
 
 
-def test_full_procedure(hcn, capsys):
+def submitted_ids(root):
+    return sorted(open(f).read().split()[0] for f in glob.glob(os.path.join(root, "calcs", "**", ".submitted"),
+                                                              recursive=True))
+
+
+def test_full_procedure(hcn, fake_sbatch, capsys):
     run(hcn, "next", "--no-squeue")
     assert os.path.isfile(os.path.join(hcn, "calcs/Species/R1/Step1_Geo_Opt/orca.inp"))
     assert stage(hcn)[0] == "waiting"
+    run(hcn, "submit", "--no-squeue", "--dry-run")
+    assert "2 job(s) would be submitted" in capsys.readouterr().out
+    assert submitted_ids(hcn) == []
     run(hcn, "submit", "--no-squeue")
-    sh = open(os.path.join(hcn, "submit_ready.sh")).read()
-    assert sh.count("sbatch --parsable submit.sl") == 2
+    out = capsys.readouterr().out
+    assert "Submitted 2 job(s)." in out and "submitted 1001" in out
+    assert submitted_ids(hcn) == ["1001", "1002"]
+    assert not os.path.exists(os.path.join(hcn, "submit_ready.sh"))
+    run(hcn, "submit", "--no-squeue", "--run")          # nothing is ever submitted twice (--run: old, no-op)
+    assert "No prepared jobs" in capsys.readouterr().out
+    assert submitted_ids(hcn) == ["1001", "1002"]
     assert fake_orca.finish_ready_jobs(hcn) == 2
     assert stage(hcn)[2] == "prepare_scan"
     for expected in ("OptTS", "IRC", "Fwd/Bwd", "DONE"):
@@ -53,7 +67,7 @@ def test_scan_restart_and_image_choice(hcn, capsys):
     run(hcn, "next", "--no-squeue")
     fake_orca.finish_ready_jobs(hcn, die_after=12)          # the SCAN hits the time limit
     st, detail, _ = stage(hcn)
-    assert st == "SCAN" and "restart-scan" in detail
+    assert st == "SCAN" and "mechflow reset S1" in detail
     run(hcn, "restart-scan", "S1")
     scan2 = os.path.join(hcn, "calcs/Steps/S1/Step2Ba_SCAN/SCAN_2")
     assert job_state(scan2) == "ready"
@@ -161,3 +175,21 @@ def test_single_points_off_by_default(hcn):
     assert not os.path.exists(os.path.join(hcn, "calcs/Species/R1/SP_Single_Point"))
     from mechflow.energies import Energies
     assert Energies(Project.load(hcn)).level == "dft"
+
+
+def test_submit_problems(hcn, fake_sbatch, monkeypatch, capsys):
+    """sbatch refusing a job leaves it ready to submit again; no sbatch at all stops at once."""
+    run(hcn, "next", "--no-squeue")
+    monkeypatch.setenv("FAKE_SBATCH_FAIL", "1")
+    run(hcn, "submit", "--no-squeue")
+    out = capsys.readouterr().out
+    assert out.count("NOT submitted") == 2 and "Invalid account" in out
+    assert "Submitted 0 job(s). 2 could not be submitted" in out
+    assert submitted_ids(hcn) == []
+    p = Project.load(hcn)
+    assert job_state(p.species_job_dir("R1")) == "ready"
+    monkeypatch.setenv("PATH", os.path.join(fake_sbatch, "nothing_here"))
+    with pytest.raises(SystemExit):
+        run(hcn, "submit", "--no-squeue")
+    assert "sbatch not found" in capsys.readouterr().err
+    assert submitted_ids(hcn) == []

@@ -95,8 +95,10 @@ P1      Step 1 input written
 
 Prepared 2 species and 0 step stage(s). Next: mechflow submit
 $ mechflow submit
-Wrote submit_ready.sh with 2 job(s). Submit them with:  bash submit_ready.sh
-$ bash submit_ready.sh
+submitted 5120001    calcs/Species/R1/Step1_Geo_Opt
+submitted 5120002    calcs/Species/P1/Step1_Geo_Opt
+
+Submitted 2 job(s). 'mechflow status' shows how they are doing.
 ```
 
 !!! tip "No Slurm?"
