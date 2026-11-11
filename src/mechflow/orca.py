@@ -84,8 +84,24 @@ def render_submit(settings, kind, jobname, overrides=None, local=False):
               "# ORCA under MPI requires that it be called via its full absolute path",
               "orca_exe=$(which orca)",
               "",
-              "# Don't use \"srun\" as ORCA does that itself when launching its MPI process.",
-              "${orca_exe} orca.inp > output.out",
+              "# Don't use \"srun\" as ORCA does that itself when launching its MPI process."]
+    chain = settings.get("chain") or {}
+    if not chain.get("enabled"):
+        lines += ["${orca_exe} orca.inp > output.out", ""]
+        return "\n".join(lines)
+    lines += ["orca_status=0",
+              "${orca_exe} orca.inp > output.out || orca_status=$?",
+              "",
+              "# Chained jobs (chain.enabled in project.yaml): if ORCA finished, write and submit every stage that",
+              "# can start now. sbatch runs from inside this job, so the job's own SLURM_/SBATCH_ variables go first.",
+              "if [ ${orca_status} -eq 0 ] && grep -q \"ORCA TERMINATED NORMALLY\" output.out; then",
+              "    (",
+              "        for v in $(compgen -e | grep -E '^(SLURM|SBATCH)_'); do unset \"$v\"; done"]
+    lines += ["        " + str(x) for x in (chain.get("setup") or [])]
+    lines += ["        mechflow chain",
+              "    ) || echo \"mechflow chain did not finish: run 'mechflow next' and 'mechflow submit' in the project\"",
+              "fi",
+              "exit ${orca_status}",
               ""]
     return "\n".join(lines)
 

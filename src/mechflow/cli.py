@@ -5,6 +5,7 @@
     mechflow next                  write every input that can be written now (Step 1 ... Step 4B, single points)
     mechflow submit                submit every prepared job (sbatch; --dry-run lists them first)
     mechflow reset                 set failed jobs up to run again (old files kept in failed_attempts/)
+    mechflow chain                 next + submit under a lock (run by finished jobs when chain.enabled)
     mechflow status                where every species and step is up to
     mechflow collect               Step 5: energies, profiles, product ratios -> results/
     mechflow map                   network maps (Graphviz / Mermaid) -> maps/
@@ -13,6 +14,7 @@ Run it inside a project folder (or give -p FOLDER). See https://geoffreyweal.git
 """
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -396,6 +398,47 @@ def cmd_reset(args):
                         if scratch else "'mechflow submit'."))
 
 
+CHAIN_LOCK = ".mechflow_chain.lock"
+
+
+def _take_lock(path, wait, stale=1800):
+    """A lock folder (mkdir is atomic, also on cluster file systems). A lock older than `stale` seconds is
+    left over from a job that was killed, and is taken over."""
+    t0 = time.time()
+    while True:
+        try:
+            os.mkdir(path)
+            with open(os.path.join(path, "owner"), "w") as fh:
+                fh.write("%s %s %s\n" % (os.uname()[1], os.getpid(), os.environ.get("SLURM_JOB_ID", "-")))
+            return True
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(path) > stale:
+                    shutil.rmtree(path, ignore_errors=True)
+                    continue
+            except OSError:
+                continue
+            if time.time() - t0 >= wait:
+                return False
+            time.sleep(min(5.0, max(wait / 20.0, 0.05)))
+
+
+def cmd_chain(args):
+    """What a finished job runs: write every input that can be written now and submit it, one job at a time."""
+    root = _root(args)
+    lock = os.path.join(root, CHAIN_LOCK)
+    if not _take_lock(lock, args.wait):
+        _die("another 'mechflow chain' has held %s for %.0f s: run 'mechflow next' and 'mechflow submit' later"
+             % (lock, args.wait))
+    try:
+        extra = ["--no-squeue"] if args.no_squeue else []
+        print("mechflow chain (%s): what this job lets start" % time.strftime("%Y-%m-%d %H:%M:%S"))
+        cmd_next(build_parser().parse_args(["-p", root, "next"] + extra))
+        cmd_submit(build_parser().parse_args(["-p", root, "submit"] + extra))
+    finally:
+        shutil.rmtree(lock, ignore_errors=True)
+
+
 def cmd_check(args):
     d = os.path.abspath(args.folder)
     print("job state: %s" % job_state(d, Queue(enabled=not args.no_squeue)))
@@ -616,6 +659,12 @@ def build_parser():
     q.add_argument("--dry-run", "--dry_run", dest="dry_run", action="store_true",
                    help="show what would be reset, without changing anything")
     q.set_defaults(func=cmd_reset)
+
+    q = sub.add_parser("chain", help="write and submit every stage that can start now, under a lock "
+                                     "(what a finished job runs when chain.enabled)")
+    squeue_flag(q)
+    q.add_argument("--wait", type=float, default=1200, help="seconds to wait for another chain to finish (1200)")
+    q.set_defaults(func=cmd_chain)
 
     q = sub.add_parser("check", help="the procedure's checks on one ORCA job folder")
     q.add_argument("folder")

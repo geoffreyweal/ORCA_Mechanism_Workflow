@@ -243,7 +243,7 @@ class Project:
             raise ProjectError("%s must be a mapping of sections (project, orca, species, steps, ...)" % fn)
         self.raw = raw
         known = {"project", "orca", "resources", "slurm", "stage_overrides", "scan", "species", "steps",
-                 "mechanisms", "energies", "single_point"}
+                 "mechanisms", "energies", "single_point", "chain"}
         for k in raw:
             if k not in known:
                 self.warnings.append("project.yaml: unknown section '%s' (ignored)" % k)
@@ -271,6 +271,9 @@ class Project:
                 if ln.count("#") >= 2:
                     self.warnings.append("ORCA ends a comment at a second '#', so this line is read partly as input: %r"
                                          % ln.strip())
+        ch = self.settings.get("chain") or {}
+        if not isinstance(ch.get("setup") or [], list):
+            self.errors.append("chain.setup must be a list of shell lines")
         if self.index_base not in (0, 1):
             self.errors.append("project.atom_numbering must be 0 (as in ORCA) or 1")
         for kind in (self.settings.get("stage_overrides") or {}):

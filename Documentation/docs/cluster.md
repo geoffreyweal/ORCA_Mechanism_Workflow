@@ -50,6 +50,34 @@ Small species can use fewer cores (`P2: {name: water, nprocs: 4}` in `species:`)
     `Recalc_Hess 1` recalculates the numerical Hessian at every OptTS cycle. That is the most expensive
     part of the procedure. `Recalc_Hess 5` in `orca.blocks.optts` is a common compromise.
 
+## Jobs that start the next ones (chain)
+
+With
+
+```yaml
+chain:
+  enabled: true
+  setup: ["module load Python/3.11.6-foss-2023a", "source ~/mechflow-venv/bin/activate"]
+```
+
+every job script ends, once ORCA has finished normally, by running `mechflow chain` in the project. That does what
+you would do by hand: `mechflow next` works out which stages can start now (a SCAN once its start structure is
+optimised, the OptTS from the SCAN maximum, the IRC once the TS has one imaginary frequency, Step 4B, the single
+points) and writes them, and `mechflow submit` submits them. So after the first `mechflow next` and
+`mechflow submit`, Step 1 → SCAN → OptTS → IRC → Step 4B follow one another by themselves.
+
+- `setup` holds the shell lines that make the `mechflow` command work inside a job (it runs on a compute node).
+- Only one `mechflow chain` works on a project at a time (a lock folder, `.mechflow_chain.lock`), so two jobs that
+  finish together cannot write or submit the same stage twice.
+- A result that needs you stops the chain at that point: a structure flagged CHECK, a SCAN with no maximum, a TS
+  with the wrong number of imaginary frequencies, or a job that failed. `mechflow status` shows these; deal with
+  them (`mechflow accept`, `mechflow reset`, ...), then run `mechflow next` and `mechflow submit` (or
+  `mechflow chain`) once, and the chain carries on.
+- What each chain did is at the end of the job's `slurm-<id>.out`.
+- The cluster must let jobs submit jobs (`sbatch` on a compute node), as most do.
+- Jobs written before `chain` was switched on do not chain: `mechflow next --refresh` rewrites the ones that have
+  not been submitted.
+
 ## When jobs fail
 
 `mechflow status` counts the failed jobs and says why each one stopped, when it can tell (time limit, out of

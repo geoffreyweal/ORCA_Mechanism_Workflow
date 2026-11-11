@@ -84,6 +84,18 @@ slurm:
 #     sp: {maxcore: 4000, mem_per_cpu: 5000MB}     # DLPNO-CCSD(T) needs more memory per core
 stage_overrides: {}
 
+# -------------------------------------------------------------------------------------
+# Chained jobs (optional). When a job finishes, its Slurm script runs 'mechflow chain' in the
+# project: that writes and submits every stage that can start now ('mechflow next' + 'mechflow
+# submit'), so Step 1 -> SCAN -> OptTS -> IRC -> Step 4B (and the single points) follow one
+# another by themselves. A result that needs you (CHECK, no SCAN maximum, a failed job) stops
+# the chain there: deal with it, then run 'mechflow next' and 'mechflow submit' (or 'mechflow chain').
+# -------------------------------------------------------------------------------------
+chain:
+  enabled: false
+  setup: []               # shell lines that make the 'mechflow' command work inside a job, e.g.
+                          #   ["module load Python/3.11.6-foss-2023a", "source ~/mechflow-venv/bin/activate"]
+
 scan:
   step: 0.02              # distance between SCAN points in Angstrom (as in the procedure)
   stretch_to: 3.2         # default final distance when a bond is stretched (no 'to' given)

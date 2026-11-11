@@ -13,6 +13,7 @@ Run every command inside a project folder (or any folder below it), or give `-p 
 | `mechflow submit` | submits every prepared job (`sbatch`) and records its job id in the job's folder |
 | `mechflow submit --dry-run` | lists the jobs that would be submitted, without submitting them |
 | `mechflow submit --local` | writes `run_ready.sh` to run the jobs here without Slurm |
+| `mechflow chain` | `next` + `submit` under a lock: what each finished job runs when `chain.enabled` ([details](cluster.md#jobs-that-start-the-next-ones-chain)) |
 | `mechflow reset` | sets every failed job up to run again; the old files go into `failed_attempts/` ([details](cluster.md#when-jobs-fail)) |
 | `mechflow reset S5 --stage OptTS --redo-done --from-scratch --downstream` | redoes the OptTS of S5 (and everything after it) from the beginning |
 | `mechflow submit --limit 50` | at most 50 jobs |
