@@ -14,6 +14,14 @@ from .defaults import deep_merge
 META = ".mechflow.json"          # job parameters, so an input can be rewritten later ('next --refresh')
 SUBMITTED = ".submitted"         # job id written when mechflow submits a job
 
+# slurm.print_binding: each task prints its node, the node's NUMA domains and the cores it was given (the
+# print_binding_stats step of NeSI's ORCA job scripts). A job is not stopped if this step fails.
+PRINT_BINDING = (
+    r'''srun --job-name=print_binding_stats bash -c "echo -e \"Task #\${SLURM_PROCID} is running on node '''
+    r'''\$(hostname).\n\$(hostname) has the following NUMA configuration:\n\$(lscpu | grep -i --color=none numa)'''
+    r'''\nTask #\${SLURM_PROCID} has \$(nproc) CPUs, their core IDs are \$(taskset -c -p \$\$ | awk '{print \$NF}')'''
+    r'''\n===========================================\"" || echo "(the cores of each task could not be printed)"''')
+
 # ----------------------------------------------------------------------------- settings for one job
 
 
@@ -78,8 +86,13 @@ def render_submit(settings, kind, jobname, overrides=None, local=False):
              "#SBATCH --error=slurm-%j.err",
              "#SBATCH --nodes=1 # OpenMPI can have problems with ORCA over multiple nodes sometimes, depending on your system."]
     lines += [x.strip() for x in (s.get("extra_sbatch") or []) if str(x).strip()]
-    lines += ["", "# Load ORCA", "module load %s" % s["orca_module"]]
+    lines += [""]
+    if s.get("module_purge"):
+        lines += ["# Start from a clean environment", "module purge", ""]
+    lines += ["# Load ORCA", "module load %s" % s["orca_module"]]
     lines += [str(x) for x in (s.get("extra_lines") or [])]
+    if s.get("print_binding"):
+        lines += ["", "# The cores each task was given, and the node's NUMA domains", PRINT_BINDING]
     lines += ["",
               "# ORCA under MPI requires that it be called via its full absolute path",
               "orca_exe=$(which orca)",

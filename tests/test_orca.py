@@ -103,3 +103,53 @@ def test_rewrite_job_uses_current_settings(tmp_path):
     s = deep_merge(default_settings(), {"orca": {"method": "!PBE0 DEF2-SVP D3BJ"}})
     assert orca.rewrite_job(d, s)
     assert open(os.path.join(d, "orca.inp")).read().startswith("!PBE0 DEF2-SVP D3BJ\n")
+
+
+GENOA = {"slurm": {"partition": "genoa", "module_purge": True, "print_binding": True,
+                   "extra_sbatch": ["#SBATCH --cores-per-socket=21", "#SBATCH --threads-per-core=1",
+                                    "#SBATCH --distribution=*:block:*", "#SBATCH --mem-bind=local"],
+                   "extra_lines": ["export OMP_PROC_BIND=true", "export OMP_PLACES=cores"]}}
+
+
+def test_submit_script_numa_settings():
+    """module_purge and print_binding (off by default), with NeSI's NUMA settings for Genoa nodes."""
+    plain = orca.render_submit(default_settings(), "opt", "x")
+    assert "module purge" not in plain and "print_binding_stats" not in plain
+    sl = orca.render_submit(deep_merge(default_settings(), GENOA), "opt", "x")
+    lines = sl.splitlines()
+    assert "#SBATCH --partition=genoa" in lines and "#SBATCH --distribution=*:block:*" in lines
+    k = lines.index("module purge")
+    first = [ln for ln in lines if ln.strip() and not ln.startswith("#")][0]
+    assert first == "module purge"                           # the first command after the #SBATCH lines
+    assert lines[k + 1:k + 4] == ["", "# Load ORCA", "module load ORCA/6.1.0-f.0-OpenMPI-4.1.5"]
+    assert lines[k + 4:k + 6] == ["export OMP_PROC_BIND=true", "export OMP_PLACES=cores"]
+    srun = [ln for ln in lines if ln.startswith("srun ")]
+    assert srun == [orca.PRINT_BINDING]
+    assert lines.index(srun[0]) < lines.index("orca_exe=$(which orca)")
+    sbatch = [k for k, ln in enumerate(lines) if ln.startswith("#SBATCH")]
+    assert max(sbatch) < lines.index("module purge")       # Slurm reads no #SBATCH line after the first command
+
+
+def test_print_binding_runs_in_bash(tmp_path):
+    """The binding line is valid bash, and prints what it should (srun, lscpu and taskset faked)."""
+    import shutil
+    import subprocess
+    import pytest
+    if not shutil.which("bash"):
+        pytest.skip("no bash")
+    fake = {"srun": '#!/bin/sh\nwhile [ "$1" != "bash" ]; do shift; done\nSLURM_PROCID=0 exec "$@"\n',
+            "lscpu": "#!/bin/sh\necho 'NUMA node(s):        8'\n",
+            "taskset": "#!/bin/sh\necho \"pid $3's current affinity list: 0-20\"\n",
+            "nproc": "#!/bin/sh\necho 21\n"}
+    for name, text in fake.items():
+        write(str(tmp_path / name), text)
+        os.chmod(str(tmp_path / name), 0o755)
+    env = dict(os.environ, PATH="%s%s%s" % (tmp_path, os.pathsep, os.environ.get("PATH", "")))
+    res = subprocess.run(["bash", "-e", "-c", orca.PRINT_BINDING], capture_output=True, text=True, env=env)
+    assert res.returncode == 0, res.stderr
+    assert "Task #0 is running on node" in res.stdout
+    assert "NUMA node(s):        8" in res.stdout and "Task #0 has 21 CPUs, their core IDs are 0-20" in res.stdout
+    env["PATH"] = str(tmp_path / "nothing")                  # no srun at all: the job goes on
+    res = subprocess.run(["/bin/bash", "-e", "-c", orca.PRINT_BINDING + "; echo still-running"],
+                         capture_output=True, text=True, env=env)
+    assert "could not be printed" in res.stdout and "still-running" in res.stdout

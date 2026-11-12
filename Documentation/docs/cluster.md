@@ -46,6 +46,30 @@ slurm:
 
 Small species can use fewer cores (`P2: {name: water, nprocs: 4}` in `species:`).
 
+### NUMA settings (Mahuika's Genoa nodes)
+
+A node is split into NUMA domains: groups of cores with the memory closest to them. ORCA can run slower, and
+its run time can vary from run to run, when a job's cores are spread over several NUMA domains. NeSI's ORCA
+page gives these settings for Mahuika's Genoa nodes, where a NUMA domain has 21 cores (Slurm treats each one as
+a socket; on the Milan nodes it is 16):
+
+```yaml
+slurm:
+  partition: genoa
+  module_purge: true          # a clean environment: 'module purge' before the ORCA module is loaded
+  print_binding: true         # each task's cores and the node's NUMA domains, at the top of slurm-<id>.out
+  extra_sbatch: ["#SBATCH --account=nesi12345",
+                 "#SBATCH --cores-per-socket=21", "#SBATCH --threads-per-core=1",
+                 "#SBATCH --distribution=*:block:*", "#SBATCH --mem-bind=local"]
+  extra_lines: ["export OMP_PROC_BIND=true", "export OMP_PLACES=cores"]
+```
+
+The four `#SBATCH` lines ask for cores next to each other, filling one NUMA domain before the next, with memory
+from the same domain; the two `export` lines stop threads moving between cores. `print_binding` runs a short
+`srun` step before ORCA starts that prints the cores each task was given, so you can see whether a job was
+spread over several NUMA domains (if that step fails, the job still runs ORCA). Keep `%maxcore` at about 80% of
+`mem_per_cpu`, as ORCA can use more memory than `%maxcore`.
+
 !!! tip "OptTS cost"
     `Recalc_Hess 1` recalculates the numerical Hessian at every OptTS cycle. That is the most expensive
     part of the procedure. `Recalc_Hess 5` in `orca.blocks.optts` is a common compromise.

@@ -74,8 +74,12 @@ slurm:
   partition: genoa,milan
   time: "3-00:00"
   mem_per_cpu: 2000MB
+  module_purge: false     # true: 'module purge' just before the ORCA module is loaded (every job starts clean)
+  print_binding: false    # true: before ORCA starts, print the cores each task was given and the node's NUMA
+                          # domains (into slurm-<id>.out), to check that a job was not spread over NUMA domains
   extra_sbatch: []        # extra "#SBATCH ..." lines, e.g. ["#SBATCH --account=nesi12345"]
-  extra_lines: []         # shell lines run before ORCA starts, e.g. ["module purge"]
+  extra_lines: []         # shell lines run after the module is loaded, before ORCA starts,
+                          # e.g. ["export OMP_PROC_BIND=true", "export OMP_PLACES=cores"]
 
 # Different resources for one kind of job (opt = Step 1 and Step 4B, scan, optts, irc,
 # sp = the single points), e.g.
