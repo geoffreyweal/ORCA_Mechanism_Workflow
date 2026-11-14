@@ -26,16 +26,35 @@ reference.
 
 ### Higher-level single points (optional)
 
-With `single_point.enabled: true` (see [project.yaml](project_file.md#single_point)), `mechflow next` also
-writes a single point (SP) on every optimised species (from Step 1) and every transition state (from Step 3,
-once it has exactly one imaginary frequency), for example DLPNO-CCSD(T)/def2-TZVPP on the DFT structures.
-`collect` then uses the composite free energy
+With `single_point.enabled: true` (see [project.yaml](project_file.md#single_point)), the project has single
+points (SP) on its optimised species (from Step 1) and transition states (from Step 3), for example
+DLPNO-CCSD(T)/def2-TZVPP on the DFT structures. They are expensive, so they run when you say so:
+
+```bash
+mechflow sp --dry-run       # what would run now
+mechflow sp                 # write the missing single points and submit them
+```
+
+`mechflow sp` takes every species whose Step 1 is usable and every TS whose step is DONE (validated through the
+IRC and Step 4B, so no single point is spent on a TS that turns out not to be one); `--all-ts` also takes TSs whose
+OptTS has exactly one imaginary frequency but are not validated yet. It takes the usual `--species`, `--step` and
+`--mech` choices; `--write-only` writes without submitting. Run it again later for the structures that are ready by
+then: it never writes or submits one twice. `mechflow next`, `submit` and `chain` leave the single points alone,
+unless `single_point.auto: true`: then `next` writes each one as soon as its structure is ready (a TS's once its
+OptTS has one imaginary frequency) and `submit` submits them. `status` says how many can be run now.
+A species of more than one molecule (a complex, such as a SCAN that starts from two molecules side by side) gets
+none: a state's energy is the sum of its molecules' energies, and a TS's state counts the TS in place of its start.
+A complex that a mechanism has as a state gets one anyway, and `single_point.complexes: true` gives every complex
+one. Without its single point, a complex has no energy at this level, so `steps.csv`'s barrier from the SCAN start
+(`dG_act_from_start`) is then only given with `--level dft`.
+Once single points have finished, `collect` uses the composite free energy
 
     G = E(SP) + [G - E(el)]
 
 where `G - E(el)` is the thermal correction of the DFT frequency calculation (ORCA prints it as `G-E(el)`).
 A species or TS counts only when its single point has finished, so every number in the results is at the same
-level. `mechflow collect --level dft` gives the DFT free energies alone (e.g. to compare the two levels).
+level. Before any single point has finished, `collect` gives the DFT free energies; `mechflow collect --level dft`
+always gives them (e.g. to compare the two levels), `--level sp` always the single points.
 `species.csv` lists G, E(el), G - E(el), E(SP) and the G used for each species; `steps.csv` lists E(SP) of each
 TS. The first lines of `summary.md` say which level was used.
 

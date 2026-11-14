@@ -130,7 +130,7 @@ def test_single_points(hcn, capsys):
     uses E(SP) + [G - E(el)] of the DFT job, or the DFT G with --level dft."""
     yaml_path = os.path.join(hcn, "project.yaml")
     with open(yaml_path, "a") as fh:
-        fh.write("\nsingle_point:\n  enabled: true\n"
+        fh.write("\nsingle_point:\n  enabled: true\n  auto: true\n"
                  "stage_overrides:\n  sp: {maxcore: 4000, mem_per_cpu: 5000MB}\n")
     run(hcn, "next", "--no-squeue")
     fake_orca.finish_ready_jobs(hcn)
@@ -193,3 +193,79 @@ def test_submit_problems(hcn, fake_sbatch, monkeypatch, capsys):
         run(hcn, "submit", "--no-squeue")
     assert "sbatch not found" in capsys.readouterr().err
     assert submitted_ids(hcn) == []
+
+
+def test_no_single_points_for_complexes(hcn, capsys):
+    """A species of two molecules (here two waters side by side, as a SCAN start would be) gets no single point: a
+    state's energy is the sum of its molecules'. single_point.complexes: true gives it one."""
+    with open(os.path.join(hcn, "species", "C9.xyz"), "w") as fh:
+        fh.write("6\ncharge=0 mult=1\nO 0 0 0\nH 0.96 0 0\nH -0.24 0.93 0\nO 3.2 0 0\nH 4.16 0 0\nH 2.96 0.93 0\n")
+    yaml_path = os.path.join(hcn, "project.yaml")
+    text = open(yaml_path).read().replace("  P1: hydrogen isocyanide\n", "  P1: hydrogen isocyanide\n  C9: two waters\n")
+    open(yaml_path, "w").write(text + "\nsingle_point:\n  enabled: true\n  auto: true\n")
+    p = Project.load(hcn)
+    from mechflow.workflow import molecules, sp_needed
+    assert molecules(p, p.species["C9"]) == 2 and molecules(p, p.species["R1"]) == 1
+    assert not sp_needed(p, p.species["C9"]) and sp_needed(p, p.species["R1"])
+    run(hcn, "next", "--no-squeue")
+    fake_orca.finish_ready_jobs(hcn)
+    capsys.readouterr()
+    run(hcn, "next", "--no-squeue")
+    out = capsys.readouterr().out
+    assert "single point (SP) of R1 written" in out and "single point (SP) of C9" not in out
+    assert not os.path.exists(os.path.join(hcn, "calcs/Species/C9/SP_Single_Point"))
+    run(hcn, "status", "--no-squeue")
+    assert "1 complex(es) of several molecules need none" in capsys.readouterr().out
+    open(yaml_path, "a").write("  complexes: true\n")
+    run(hcn, "next", "--no-squeue")
+    assert "single point (SP) of C9 written" in capsys.readouterr().out
+
+
+def test_sp_command(hcn, fake_sbatch, capsys):
+    """single_point.auto false (the default): next and submit leave the single points alone; 'mechflow sp' writes and
+    submits them when asked - a species once its Step 1 is usable, a TS once its step is DONE (--all-ts: once its OptTS
+    has one imaginary frequency)."""
+    with open(os.path.join(hcn, "project.yaml"), "a") as fh:
+        fh.write("\nsingle_point:\n  enabled: true\n")
+    run(hcn, "next", "--no-squeue")
+    run(hcn, "submit", "--no-squeue")
+    fake_orca.finish_ready_jobs(hcn)                       # Step 1 of R1 and P1
+    run(hcn, "next", "--no-squeue")                        # the SCAN, but no single points
+    assert not os.path.exists(os.path.join(hcn, "calcs/Species/R1/SP_Single_Point"))
+    capsys.readouterr()
+    run(hcn, "status", "--no-squeue")
+    assert "2 can be run now: 'mechflow sp'" in capsys.readouterr().out
+    run(hcn, "sp", "--no-squeue", "--dry-run")
+    out = capsys.readouterr().out
+    assert "would write and submit  R1" in out and "would write and submit  P1" in out and "2 single point(s)" in out
+    assert "1 structure(s) are not ready for one yet" in out                       # TS1: no TS yet
+    assert not os.path.exists(os.path.join(hcn, "calcs/Species/R1/SP_Single_Point"))
+    run(hcn, "sp", "--no-squeue")
+    out = capsys.readouterr().out
+    assert out.count("submitted 10") == 2 and "Submitted 2 single point(s)" in out
+    from mechflow.energies import Energies
+    assert Energies(Project.load(hcn)).level == "dft"      # no single point has finished yet: the DFT energies
+    for _ in range(2):                                     # SCAN, then the OptTS
+        run(hcn, "submit", "--no-squeue")
+        fake_orca.finish_ready_jobs(hcn)
+        run(hcn, "next", "--no-squeue")
+    capsys.readouterr()
+    run(hcn, "sp", "--no-squeue", "--dry-run")             # TS1 has one imaginary frequency, but S1 is not DONE yet
+    assert "0 single point(s)" in capsys.readouterr().out
+    run(hcn, "sp", "--no-squeue", "--dry-run", "--all-ts")
+    assert "would write and submit  TS1" in capsys.readouterr().out
+    for _ in range(3):                                     # IRC, Forwards / Backwards: S1 DONE
+        run(hcn, "submit", "--no-squeue")
+        fake_orca.finish_ready_jobs(hcn)
+        run(hcn, "next", "--no-squeue")
+    assert stage(hcn)[0] == "DONE"
+    assert not os.path.exists(os.path.join(hcn, "calcs/Steps/S1/SP_Single_Point"))   # next never writes it
+    capsys.readouterr()
+    run(hcn, "sp", "--no-squeue", "--write-only")
+    assert "TS1     single point (SP) of TS1 written" in capsys.readouterr().out
+    run(hcn, "submit", "--no-squeue")                      # submit leaves a single point to 'mechflow sp'
+    assert "No prepared jobs" in capsys.readouterr().out
+    run(hcn, "sp", "--no-squeue")
+    assert "Submitted 1 single point(s)" in capsys.readouterr().out
+    fake_orca.finish_ready_jobs(hcn)
+    assert Energies(Project.load(hcn)).level == "sp"       # now the single points

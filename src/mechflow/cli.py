@@ -5,6 +5,7 @@
     mechflow next                  write every input that can be written now (Step 1 ... Step 4B, single points)
     mechflow submit                submit every prepared job (sbatch; --dry-run lists them first)
     mechflow reset                 set failed jobs up to run again (old files kept in failed_attempts/)
+    mechflow sp                    run the single points (SP), when you say so (single_point.auto: false)
     mechflow chain                 next + submit under a lock (run by finished jobs when chain.enabled)
     mechflow status                where every species and step is up to
     mechflow collect               Step 5: energies, profiles, product ratios -> results/
@@ -28,8 +29,8 @@ from .orca import SUBMITTED, Queue, job_state, parse_output, slurm_problem
 from .project import PROJECT_FILE, Project, ProjectError, expression, find_project, match_any, species_sort_key
 from .report import overview, plural
 from .workflow import (ACCEPTED, VALIDATE, job_folders, prepare, refresh, restart_scan, retire, scan_maximum,
-                       scan_points, scan_profile_text, sp_enabled, sp_setup, species_result, species_setup,
-                       species_sp_dir, step_progress, step_sp_dir)
+                       scan_points, scan_profile_text, sp_auto, sp_enabled, sp_needed, sp_plan, sp_setup, species_result,
+                       species_setup, species_sp_dir, step_progress, step_sp_dir)
 
 
 def _die(msg, code=1):
@@ -198,14 +199,21 @@ def cmd_status(args):
                 continue
             print("  %-7s %-8s %s%s" % (st.id, stage, detail, "   -> mechflow next" if action else ""))
     if sp_enabled(p):
-        spc = Counter(job_state(species_sp_dir(p, sp.id), q) for sp in species)
+        need = [sp for sp in species if sp_needed(p, sp)]
+        spc = Counter(job_state(species_sp_dir(p, sp.id), q) for sp in need)
         spc.update(job_state(step_sp_dir(p, st.id), q) for st in steps)
         method = str((p.settings.get("single_point") or {}).get("method", "")).lstrip("!").strip()
-        print("\nSINGLE POINTS (%s): %s" % (method, ", ".join("%s %d" % kv for kv in sorted(spc.items()))))
+        skipped = len(species) - len(need)
+        print("\nSINGLE POINTS (%s): %s%s" % (method, ", ".join("%s %d" % kv for kv in sorted(spc.items())),
+                                             ("; %d complex(es) of several molecules need none" % skipped) if skipped else ""))
         if spc.get("failed"):
             print("  failed: " + " ".join(
-                [sp.id for sp in species if job_state(species_sp_dir(p, sp.id), q) == "failed"] +
+                [sp.id for sp in need if job_state(species_sp_dir(p, sp.id), q) == "failed"] +
                 [st.ts for st in steps if job_state(step_sp_dir(p, st.id), q) == "failed"]))
+        if not sp_auto(p):
+            write, ready, waiting = sp_plan(p, species, steps, q)
+            if write or ready:
+                print("  %d can be run now: 'mechflow sp' (it writes and submits them; --dry-run lists them)" % (len(write) + len(ready)))
     sp_c = ", ".join("%s %d" % (k.split(" ", 1)[1], v) for k, v in sorted(counts.items()) if k.startswith("species"))
     st_c = ", ".join("%s %d" % (k.split(" ", 1)[1], v) for k, v in sorted(counts.items()) if k.startswith("steps"))
     print("\nSpecies: %s\nSteps:   %s" % (sp_c or "-", st_c or "-"))
@@ -262,7 +270,7 @@ def cmd_next(args):
             except (ValueError, OSError) as exc:
                 print("%-7s could not prepare %s: %s" % (st.id, stage, exc))
     n_sp_jobs = 0
-    if sp_enabled(p):              # the single points (SP) of every optimised species and TS
+    if sp_auto(p):                 # single_point.auto: the single points (SP) of every optimised species and TS
         for item, kind, lab in [(sp, "species", sp.id) for sp in species] + [(st, "step", st.id) for st in steps]:
             msg = sp_setup(p, item, kind, q)
             if msg:
@@ -304,7 +312,8 @@ def cmd_submit(args):
     p = _load(args)
     species, steps, _ = _select(p, args)
     q = Queue(enabled=not args.no_squeue)
-    ready = [f for f in job_folders(p, species, steps) if job_state(f, q) == "ready"]
+    # the single points only with single_point.auto; otherwise 'mechflow sp' submits them
+    ready = [f for f in job_folders(p, species, steps, with_sp=sp_auto(p)) if job_state(f, q) == "ready"]
     if args.limit:
         ready = ready[:args.limit]
     if not ready:
@@ -421,6 +430,47 @@ def _take_lock(path, wait, stale=1800):
             if time.time() - t0 >= wait:
                 return False
             time.sleep(min(5.0, max(wait / 20.0, 0.05)))
+
+
+def cmd_sp(args):
+    """Run the single points (SP), when you say so: write the missing ones and submit every prepared one."""
+    p = _load(args)
+    if not sp_enabled(p):
+        _die("single_point.enabled is false in project.yaml, so this project has no single points")
+    species, steps, _ = _select(p, args)
+    q = Queue(enabled=not args.no_squeue)
+    write, ready, waiting = sp_plan(p, species, steps, q, all_ts=args.all_ts)
+    lab = lambda kind, item: item.id if kind == "species" else item.ts            # noqa: E731
+    method = str((p.settings.get("single_point") or {}).get("method", "")).lstrip("!").strip()
+    if args.dry_run:
+        for kind, item in write:
+            print("would write and submit  %s" % lab(kind, item))
+        for f in ready:
+            print("would submit            %s" % _rel(p, f))
+        print("\n%d single point(s) (%s) would be run (dry run: nothing was written or submitted)." % (len(write) + len(ready), method))
+    else:
+        for kind, item in write:
+            msg = sp_setup(p, item, kind, q)
+            if msg:
+                print("%-7s %s" % (lab(kind, item), msg))
+                ready.append(species_sp_dir(p, item.id) if kind == "species" else step_sp_dir(p, item.id))
+        n = failed = 0
+        if not args.write_only:
+            for f in ready:
+                ok, msg = _submit_once(f)
+                if ok:
+                    n += 1
+                    print("submitted %-10s %s" % (msg, _rel(p, f)))
+                    continue
+                if msg.startswith("sbatch not found"):
+                    _die(msg + " (or use --write-only)")
+                failed += 1
+                print("NOT submitted %s: %s" % (_rel(p, f), msg))
+        print("\n%s %d single point(s) (%s).%s" % ("Wrote" if args.write_only else "Submitted", len(ready) if args.write_only else n,
+                                                  method, (" %d could not be submitted (see above)." % failed) if failed else ""))
+    if waiting:
+        print("%d structure(s) are not ready for one yet: species whose Step 1 is not usable, TSs whose step is not DONE%s "
+              "('mechflow status')." % (waiting, "" if args.all_ts else " (--all-ts: also TSs with one imaginary frequency)"))
 
 
 def cmd_chain(args):
@@ -659,6 +709,15 @@ def build_parser():
     q.add_argument("--dry-run", "--dry_run", dest="dry_run", action="store_true",
                    help="show what would be reset, without changing anything")
     q.set_defaults(func=cmd_reset)
+
+    q = sub.add_parser("sp", help="run the single points (SP), when you say so: write the missing ones and submit them")
+    filters(q)
+    squeue_flag(q)
+    q.add_argument("--all-ts", action="store_true",
+                   help="also the TSs whose OptTS has one imaginary frequency but whose step is not DONE (validated) yet")
+    q.add_argument("--dry-run", "--dry_run", dest="dry_run", action="store_true", help="list them, without writing or submitting")
+    q.add_argument("--write-only", action="store_true", help="write them, without submitting")
+    q.set_defaults(func=cmd_sp)
 
     q = sub.add_parser("chain", help="write and submit every stage that can start now, under a lock "
                                      "(what a finished job runs when chain.enabled)")

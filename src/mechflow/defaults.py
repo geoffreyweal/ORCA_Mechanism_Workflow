@@ -53,17 +53,22 @@ orca:
 
 # -------------------------------------------------------------------------------------
 # Single points (SP, optional): a higher-level single-point energy on every optimised structure
-# (each species from Step 1, each transition state from Step 3), e.g. DLPNO-CCSD(T)
+# (each species of one molecule from Step 1, each transition state from Step 3), e.g. DLPNO-CCSD(T)
 # on the DFT geometries. 'mechflow collect' then uses
 #     G = E(single point) + [G - E(el)] of the DFT frequency calculation
 # (use 'mechflow collect --level dft' for the DFT free energies alone).
 # The single points use the scf_block and solvent_block above (the same solvent).
 # -------------------------------------------------------------------------------------
 single_point:
-  enabled: false          # true: 'mechflow next' also writes the Step 5 single points
+  enabled: false          # true: the project has single points; 'mechflow sp' runs them when you say so
+  auto: false             # true: 'mechflow next' writes them by itself as soon as each structure is ready (and
+                          # 'mechflow submit' submits them); false: only 'mechflow sp' writes and submits them
   method: "!DLPNO-CCSD(T) def2-TZVPP def2-TZVPP/C TightPNO"
   keywords: "!RIJCOSX def2/J TightSCF defgrid2"
   block: ""               # extra input for the single points, e.g. a %MDCI block
+  complexes: false        # true: also species of more than one molecule (complexes, e.g. SCAN starts). They need
+                          # none: a state's energy is the sum of its molecules' (a complex that is itself a state of
+                          # a mechanism gets one anyway)
 
 resources:
   nprocs: 32              # cores per job (%PAL NPROCS and --ntasks)
@@ -91,9 +96,10 @@ stage_overrides: {}
 # -------------------------------------------------------------------------------------
 # Chained jobs (optional). When a job finishes, its Slurm script runs 'mechflow chain' in the
 # project: that writes and submits every stage that can start now ('mechflow next' + 'mechflow
-# submit'), so Step 1 -> SCAN -> OptTS -> IRC -> Step 4B (and the single points) follow one
-# another by themselves. A result that needs you (CHECK, no SCAN maximum, a failed job) stops
-# the chain there: deal with it, then run 'mechflow next' and 'mechflow submit' (or 'mechflow chain').
+# submit'), so Step 1 -> SCAN -> OptTS -> IRC -> Step 4B follow one another by themselves (the
+# single points too with single_point.auto; otherwise 'mechflow sp' runs them). A result that
+# needs you (CHECK, no SCAN maximum, a failed job) stops the chain there: deal with it, then run
+# 'mechflow next' and 'mechflow submit' (or 'mechflow chain').
 # -------------------------------------------------------------------------------------
 chain:
   enabled: false

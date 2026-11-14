@@ -37,7 +37,8 @@ class Energies:
 
     def __init__(self, project, queue=None, level=None):
         self.project = project
-        self.level = level or ("sp" if sp_enabled(project) else "dft")
+        # by default the single points once any has finished (until then the DFT free energies)
+        self.level = level or ("sp" if sp_enabled(project) and _any_sp(project, queue) else "dft")
         if self.level not in LEVELS:
             raise ValueError("level must be one of %s" % ", ".join(LEVELS))
         self.units = project.settings["energies"].get("units", "kJ/mol")
@@ -109,6 +110,12 @@ class Energies:
 
     def rel(self, a, b):
         return None if a is None or b is None else (a - b) * self.factor
+
+
+def _any_sp(project, queue=None):
+    """Has any single point (SP) of the project finished?"""
+    return (any(sp_energy(species_sp_dir(project, sid), queue)[1] is not None for sid in project.species) or
+            any(sp_energy(step_sp_dir(project, sid), queue)[1] is not None for sid in project.steps))
 
 
 def _fmt(v, f="%.1f"):

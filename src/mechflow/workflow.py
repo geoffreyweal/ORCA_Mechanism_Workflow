@@ -5,8 +5,8 @@
     Step 3    OptTS from the highest SCAN point            calcs/Steps/<ID>/Step3_Opt_TS
     Step 4A   IRC from the transition state                calcs/Steps/<ID>/Step4A_IRC
     Step 4B   optimise both IRC end points                 calcs/Steps/<ID>/Step4B_Validate/{Forwards,Backwards}
-    SP        single points (optional: single_point.enabled), e.g. DLPNO-CCSD(T), on each optimised species
-              and transition state            calcs/Species/<ID>/SP_Single_Point, calcs/Steps/<ID>/SP_Single_Point
+    SP        single points (optional: single_point.enabled), e.g. DLPNO-CCSD(T), on each optimised species of one
+              molecule and each transition state   calcs/Species/<ID>/SP_Single_Point, calcs/Steps/<ID>/SP_Single_Point
     Step 5    energies                                     mechflow collect
 """
 import glob
@@ -137,6 +137,12 @@ def sp_enabled(project):
     return bool((project.settings.get("single_point") or {}).get("enabled"))
 
 
+def sp_auto(project):
+    """single_point.auto: 'mechflow next' writes the single points (and 'submit' submits them) by itself. Otherwise only
+    'mechflow sp' runs them, when you say so."""
+    return sp_enabled(project) and bool((project.settings.get("single_point") or {}).get("auto"))
+
+
 def species_sp_dir(project, sid):
     return project.path("calcs", "Species", sid, SP)
 
@@ -155,6 +161,24 @@ def ts_result(project, st):
     return None
 
 
+def molecules(project, sp):
+    """How many molecules a species is (its pieces that are not bonded to each other)."""
+    if sp.mol is None:
+        return 1
+    return len(chem.fragments(len(sp.mol), chem.bonds(sp.mol, project.tolerance)))
+
+
+def sp_needed(project, sp):
+    """Whether a species gets a single point. A species of more than one molecule (a complex, such as the start of a
+    SCAN) needs none: a state's energy is the sum of its molecules' energies, and a TS's state counts the TS in place of
+    its start. The exceptions: a mechanism has the complex itself as a state, or single_point.complexes is true."""
+    if (project.settings.get("single_point") or {}).get("complexes"):
+        return True
+    if molecules(project, sp) <= 1:
+        return True
+    return any(sp.id in s.full for m in project.mechanisms.values() for s in m.states if s.kind != "ts")
+
+
 def sp_setup(project, item, kind="species", queue=None):
     """Write the single point (SP) of a species (from its Step 1 structure) or of a step's TS (from its Step 3
     structure) once that structure is ready. Returns a message or None."""
@@ -162,6 +186,8 @@ def sp_setup(project, item, kind="species", queue=None):
         return None
     if kind == "species":
         sp = item
+        if not sp_needed(project, sp):
+            return None
         d, r = species_sp_dir(project, sp.id), species_result(project, sp, queue)
         xyz = r["xyz"] if r["ok"] else None
         charge, mult, name, over, label = sp.charge, sp.mult, sp.id, sp.overrides, sp.id
@@ -177,6 +203,36 @@ def sp_setup(project, item, kind="species", queue=None):
     write_job(d, project.settings, "sp", "opt_structure.xyz", charge, mult, jobname(project, name, "SP"),
               overrides=over, info={"item": name, "stage": "SP"})
     return "single point (SP) of %s written" % label
+
+
+def sp_plan(project, species, steps, queue=None, all_ts=False):
+    """What 'mechflow sp' would do now: the single points it would write [(kind, item)] - a species once its Step 1 is
+    usable (if it needs one: sp_needed), a TS once its step is DONE (with all_ts: once the OptTS has one imaginary
+    frequency) - the prepared single points it would submit (folders), and how many structures are not ready yet."""
+    write, ready, waiting = [], [], 0
+    for sp in species:
+        if not sp_needed(project, sp):
+            continue
+        d = species_sp_dir(project, sp.id)
+        s = job_state(d, queue)
+        if s == "absent":
+            if species_result(project, sp, queue)["ok"]:
+                write.append(("species", sp))
+            else:
+                waiting += 1
+        elif s == "ready":
+            ready.append(d)
+    for st in steps:
+        d = step_sp_dir(project, st.id)
+        s = job_state(d, queue)
+        if s == "absent":
+            if ts_result(project, st) is not None and (all_ts or step_progress(project, st, queue)[0] == "DONE"):
+                write.append(("step", st))
+            else:
+                waiting += 1
+        elif s == "ready":
+            ready.append(d)
+    return write, ready, waiting
 
 
 def sp_energy(folder, queue=None):
@@ -522,11 +578,12 @@ def restart_scan(project, st):
         k + 1, os.path.basename(imgs[-1]), d0, d_final, n, step)
 
 
-def job_folders(project, species, steps):
-    """Every job folder of the chosen species and steps, in a sensible order."""
+def job_folders(project, species, steps, with_sp=True):
+    """Every job folder of the chosen species and steps, in a sensible order (with_sp=False: not the single points)."""
     for sp in species:
         yield project.species_job_dir(sp.id)
-        yield species_sp_dir(project, sp.id)
+        if with_sp and sp_needed(project, sp):   # (a complex's single point, written by an older mechflow, is not submitted)
+            yield species_sp_dir(project, sp.id)
     for st in steps:
         sd = project.step_dir(st.id)
         for f in scan_folders(sd):
@@ -535,7 +592,8 @@ def job_folders(project, species, steps):
         yield os.path.join(sd, IRC)
         yield os.path.join(sd, VALIDATE, "Forwards")
         yield os.path.join(sd, VALIDATE, "Backwards")
-        yield os.path.join(sd, SP)
+        if with_sp:
+            yield os.path.join(sd, SP)
 
 
 def refresh(project, folders, queue=None):

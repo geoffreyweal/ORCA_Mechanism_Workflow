@@ -13,6 +13,7 @@ Run every command inside a project folder (or any folder below it), or give `-p 
 | `mechflow submit` | submits every prepared job (`sbatch`) and records its job id in the job's folder |
 | `mechflow submit --dry-run` | lists the jobs that would be submitted, without submitting them |
 | `mechflow submit --local` | writes `run_ready.sh` to run the jobs here without Slurm |
+| `mechflow sp [--dry-run] [--all-ts]` | runs the single points (`single_point`), when you say so: writes the missing ones (species whose Step 1 is usable, TSs whose step is DONE; `--all-ts`: also unvalidated TSs) and submits them ([details](energies.md#higher-level-single-points-optional)) |
 | `mechflow chain` | `next` + `submit` under a lock: what each finished job runs when `chain.enabled` ([details](cluster.md#jobs-that-start-the-next-ones-chain)) |
 | `mechflow reset` | sets every failed job up to run again; the old files go into `failed_attempts/` ([details](cluster.md#when-jobs-fail)) |
 | `mechflow reset S5 --stage OptTS --redo-done --from-scratch --downstream` | redoes the OptTS of S5 (and everything after it) from the beginning |
@@ -53,7 +54,7 @@ information, a job that disappeared from the queue without an output cannot be d
 
 | option | meaning |
 |---|---|
-| `--level dft/sp` | the energies to use: `dft` (G of the DFT frequency jobs) or `sp` (E of the single points + [G - E(el)] of the DFT jobs; the default when `single_point.enabled`); see [Energies](energies.md#higher-level-single-points-optional) |
+| `--level dft/sp` | the energies to use: `dft` (G of the DFT frequency jobs) or `sp` (E of the single points + [G - E(el)] of the DFT jobs; the default once a single point has finished); see [Energies](energies.md#higher-level-single-points-optional) |
 | `--proton-transfers auto/path/steps` | which proton transfers the network search may make without a barrier, for this run only (default: `energies.proton_transfers`; see [Energies](energies.md#proton-transfers-without-a-barrier)) |
 
 ## map options

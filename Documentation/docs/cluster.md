@@ -86,9 +86,10 @@ chain:
 
 every job script ends, once ORCA has finished normally, by running `mechflow chain` in the project. That does what
 you would do by hand: `mechflow next` works out which stages can start now (a SCAN once its start structure is
-optimised, the OptTS from the SCAN maximum, the IRC once the TS has one imaginary frequency, Step 4B, the single
-points) and writes them, and `mechflow submit` submits them. So after the first `mechflow next` and
-`mechflow submit`, Step 1 → SCAN → OptTS → IRC → Step 4B follow one another by themselves.
+optimised, the OptTS from the SCAN maximum, the IRC once the TS has one imaginary frequency, Step 4B) and writes
+them, and `mechflow submit` submits them. So after the first `mechflow next` and `mechflow submit`, Step 1 → SCAN →
+OptTS → IRC → Step 4B follow one another by themselves. The single points join in only with `single_point.auto`;
+otherwise `mechflow sp` runs them when you say so.
 
 - `setup` holds the shell lines that make the `mechflow` command work inside a job (it runs on a compute node).
 - Only one `mechflow chain` works on a project at a time (a lock folder, `.mechflow_chain.lock`), so two jobs that

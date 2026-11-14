@@ -90,9 +90,12 @@ An optional single point (SP) at a higher level on every optimised species and t
 ```yaml
 single_point:
   enabled: true
+  auto: false          # false: only 'mechflow sp' runs them; true: 'next' writes each as soon as it can
   method: "!DLPNO-CCSD(T) def2-TZVPP def2-TZVPP/C TightPNO"
   keywords: "!RIJCOSX def2/J TightSCF defgrid2"
   block: ""            # extra input, e.g. a %MDCI block
+  complexes: false     # true: species of more than one molecule (complexes) get one too; they need none,
+                       # as a state's energy is the sum of its molecules'
 
 stage_overrides:
   sp: {maxcore: 4000, mem_per_cpu: 5000MB}     # DLPNO-CCSD(T) needs more memory per core

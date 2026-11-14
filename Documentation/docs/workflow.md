@@ -35,9 +35,10 @@ calcs/
     Species/R1/SP_Single_Point/       orca.inp  submit.sl  opt_structure.xyz   (single point of the species)
 ```
 
-The `SP_Single_Point` folders appear only with `single_point.enabled: true`: `next` writes the single point of
-a species as soon as its Step 1 is usable, and that of a transition state as soon as its OptTS has exactly one
-imaginary frequency (it does not wait for the IRC). `status` counts them under SINGLE POINTS.
+The `SP_Single_Point` folders appear only with `single_point.enabled: true`, when `mechflow sp` writes them (a
+species once its Step 1 is usable, a transition state once its step is DONE), or, with `single_point.auto: true`,
+when `next` does (a TS as soon as its OptTS has exactly one imaginary frequency). `status` counts them under SINGLE
+POINTS.
 
 Every job folder also has a small `.mechflow.json` (what the job is) and, once submitted, `.submitted`
 (the Slurm job id).
