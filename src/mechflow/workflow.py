@@ -15,7 +15,7 @@ import os
 import re
 import shutil
 
-from . import chem
+from . import chem, placement
 from .orca import (job_state, parse_output, read_meta, read_text, rewrite_job, slurm_problem, write_job)
 
 HARTREE_KJ = 2625.4996
@@ -298,51 +298,66 @@ CONTACT_SCALE = 3.0      # Angstrom: atoms this much further from the other mole
 
 
 def assemble(project, sp, queue=None):
-    """The structure of a complex built from its molecules: each molecule's optimised structure (Step 1) is fitted onto
-    the place the complex's xyz file has that molecule, weighted towards its atoms near the other molecules, so that the
-    contacts drawn in the complex (e.g. the hydrogen bond a SCAN starts from) stay as they were.
+    """The structure of a complex built from its molecules. Each molecule keeps its optimised structure (Step 1) as it
+    is. It is first fitted onto the place the complex's xyz file has that molecule, weighted towards its atoms near the
+    other molecules; then the molecules are moved and turned as wholes (placement.place) until the contacts drawn in
+    the complex (e.g. the hydrogen bond a SCAN starts from) are as long as drawn and no other atoms of different
+    molecules are too close (an optimised molecule may have another shape than the one drawn in the complex).
 
     Returns (Molecule, notes) - or (None, why) while a molecule has no usable optimised structure yet."""
     try:
         parts = complex_parts(project, sp)
     except ValueError as exc:
         return None, "cannot be built from its molecules: %s" % exc
-    waiting = []
+    waiting, files = [], []
     for pid, _ in parts:
         r = species_result(project, project.species[pid], queue)
         if not r["ok"]:
             waiting.append("%s (%s)" % (pid, r["note"] or r["state"]))
+        else:
+            files.append((r["xyz"], os.path.getmtime(r["xyz"])))
     if waiting:
         return None, "waiting for Step 1 of %s" % ", ".join(waiting)
+    cache = project.__dict__.setdefault("_built", {})
+    key = (sp.id, tuple(files))
+    if key not in cache:
+        cache[key] = _assemble(project, sp, parts, [f for f, _ in files])
+    return cache[key]
+
+
+def _assemble(project, sp, parts, files):
+    drawn = sp.mol.coords
     coords = [None] * len(sp.mol)
-    fits = []
-    for pid, idx in parts:
-        opt = chem.read_xyz(species_result(project, project.species[pid], queue)["xyz"])
+    for (pid, idx), xyz in zip(parts, files):
+        opt = chem.read_xyz(xyz)
         mine = set(idx)
-        others = [c for a, c in enumerate(sp.mol.coords) if a not in mine]
-        target = [sp.mol.coords[a] for a in idx]
+        others = [c for a, c in enumerate(drawn) if a not in mine]
+        target = [drawn[a] for a in idx]
         w = [math.exp(-min(math.dist(c, o) for o in others) / CONTACT_SCALE) + 1e-3 for c in target] if others else None
         rot, t = chem.superpose(opt.coords, target, w)
-        placed = chem.transform(opt.coords, rot, t)
-        for k, a in enumerate(idx):
-            coords[a] = placed[k]
-        fits.append("%s (moved %.2f A on average from where species/%s.xyz has it)" % (pid, chem.rmsd(placed, target), sp.id))
+        for k, c in zip(idx, chem.transform(opt.coords, rot, t)):
+            coords[k] = c
+    bodies = [idx for _, idx in parts]
+    coords, contact, _ = placement.place(sp.mol.symbols, drawn, coords, bodies, chem.bonds(sp.mol, project.tolerance),
+                                         project.tolerance, seed=sp.id)
     mol = chem.Molecule(sp.mol.symbols, coords, "%s built from the optimised %s" % (sp.id, " + ".join(p for p, _ in parts)))
-    part_of = {}
-    for k, (_, idx) in enumerate(parts):
-        for a in idx:
-            part_of[a] = k
+    label = lambda a: project.atom_label(mol, a)
+    fits = ["%s (moved %.2f A on average from where species/%s.xyz has it)" % (
+        pid, chem.rmsd([coords[a] for a in idx], [drawn[a] for a in idx]), sp.id) for pid, idx in parts]
+    part_of = {a: k for k, idx in enumerate(bodies) for a in idx}
     clash = [(i, j) for i, j in chem.bonds(mol, project.tolerance) if part_of[i] != part_of[j]]
     if clash:
         i, j = clash[0]
-        return None, ("cannot be built from its molecules: their optimised structures put %s and %s %.2f A apart (as "
-                      "if bonded); move the molecules further apart in species/%s.xyz" % (
-                          project.atom_label(mol, i), project.atom_label(mol, j), chem.distance(mol.coords, i, j), sp.id))
+        return None, ("cannot be built from its molecules: even moved apart, their optimised structures put %s and %s "
+                      "%.2f A apart (as if bonded); check how the molecules are placed in species/%s.xyz" % (
+                          label(i), label(j), chem.distance(mol.coords, i, j), sp.id))
     i, j = min(((a, b) for a in range(len(mol)) for b in range(a + 1, len(mol)) if part_of[a] != part_of[b]),
                key=lambda ab: chem.distance(mol.coords, *ab))
-    notes = fits + ["closest contact between molecules: %s...%s %.2f A (%.2f A in species/%s.xyz)" % (
-        project.atom_label(mol, i), project.atom_label(mol, j), chem.distance(mol.coords, i, j),
-        chem.distance(sp.mol.coords, i, j), sp.id)]
+    notes = fits + ["contacts kept from species/%s.xyz: %s" % (sp.id, ", ".join(
+        "%s...%s %.2f A (%.2f A drawn)" % (label(a), label(b), chem.distance(mol.coords, a, b), d0)
+        for a, b, d0 in contact))]
+    notes.append("closest contact between molecules: %s...%s %.2f A (%.2f A in species/%s.xyz)" % (
+        label(i), label(j), chem.distance(mol.coords, i, j), chem.distance(drawn, i, j), sp.id))
     return mol, notes
 
 
@@ -680,7 +695,8 @@ def prepare(project, st, action, image=None):
                 mol.comment, st.charge, st.mult))
             with open(os.path.join(folder, "start_built_from_molecules.txt"), "w") as fh:
                 fh.write("start_opt.xyz is %s built from the optimised structures (Step 1) of its molecules, each fitted "
-                         "onto where species/%s.xyz has it (complexes.optimise: false):\n%s\n" % (
+                         "onto where species/%s.xyz has it, then moved and turned as a whole so that the drawn contacts "
+                         "are as drawn and no atoms are too close (complexes.optimise: false):\n%s\n" % (
                              st.start, st.start, "\n".join("  " + n for n in sres["built"])))
         d0 = round(chem.distance(mol.coords, i, j), 3)
         n = max(int(round(abs(st.to - d0) / st.scan_step)) + 1, 3)

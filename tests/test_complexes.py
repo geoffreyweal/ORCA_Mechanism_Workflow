@@ -350,3 +350,28 @@ def test_species_keywords(hcn, capsys):
     assert "defgrid2" in open(os.path.join(p.species_job_dir("P1"), "orca.inp")).read()
     write(y, open(y).read().replace('keywords: "!OPT', 'keywords: "OPT'))
     assert any("keywords must be an ORCA '!' line" in e for e in Project.load(hcn).errors)
+
+
+def test_placement_moves_overlapping_molecules_apart():
+    """An optimised molecule fitted on top of the other one (its optimised shape differs from the drawn one) is moved
+    and turned as a whole until the drawn contact is as drawn and nothing else is too close; its shape is unchanged."""
+    from mechflow import placement
+    drawn = [p for _, p in HCN + WATER_IN_C9]
+    symbols = [e for e, _ in HCN + WATER_IN_C9]
+    water = [(x + 4.3, y - 0.2, z + 0.3) for _, (x, y, z) in WATER_IN_C9]                # its O on the N of HCN
+    start = drawn[:3] + water
+    bodies = [[0, 1, 2], [3, 4, 5]]
+    bonds = chem.bonds(chem.Molecule(symbols, drawn))
+    assert any(i < 3 <= j for i, j in chem.bonds(chem.Molecule(symbols, start)))           # overlapping at first
+    coords, contacts, left = placement.place(symbols, drawn, start, bodies, bonds, seed="C9")
+    assert [(i, j) for i, j, _ in contacts] == [(2, 3)]                                    # the H...O drawn at 1.90 A
+    assert abs(math.dist(coords[2], coords[3]) - 1.90) < 0.02
+    polar = placement.polar_hydrogens(symbols, bonds)
+    assert all(math.dist(coords[i], coords[j]) > 0.98 * placement.minimum(symbols, polar, i, j)
+               for i in range(3) for j in range(3, 6) if (i, j) != (2, 3))
+    assert coords[:3] == [list(p) for p in drawn[:3]]                                      # the larger/first stays
+    for a in range(3, 6):                                                                  # the water is rigid
+        for b in range(3, 6):
+            assert abs(math.dist(coords[a], coords[b]) - math.dist(water[a - 3], water[b - 3])) < 1e-9
+    again = placement.place(symbols, drawn, start, bodies, bonds, seed="C9")[0]
+    assert again == coords                                                                 # deterministic

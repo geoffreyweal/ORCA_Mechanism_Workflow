@@ -148,14 +148,25 @@ complexes:
 ```
 
 a complex that is only the start of a SCAN gets no Step 1. When its SCAN starts, mechflow builds it from the
-optimised structures (Step 1) of its molecules: each molecule is fitted onto the place the complex's xyz file has it,
-weighted towards its atoms near the other molecules, so the contact you drew (the hydrogen bond the SCAN starts
-from) stays as it was. The first SCAN point relaxes the whole complex anyway, and no state needs the complex's
-energy (a state's energy is the sum of its molecules').
+optimised structures (Step 1) of its molecules. Each molecule keeps its optimised shape exactly:
+
+1. it is fitted onto the place the complex's xyz file has it, weighted towards its atoms near the other molecules;
+2. then the molecules are moved and turned as wholes (the largest stays put) until the contacts you drew are as long
+   as drawn, and no other atoms of different molecules are closer than 0.75 × the sum of their van der Waals radii
+   (1.7 Å for a polar H and an N, O or S). The contacts are the hydrogen bonds between the molecules (a polar H ...
+   N/O/S up to 2.6 Å), any pair drawn closer than that minimum (e.g. the H of an acid over a carbon it will
+   protonate), or else the closest pair.
+
+Step 2 matters when an optimised molecule has another shape than the one drawn in the complex: a phenyl ring
+turned another way, a ring flipped, an OH pointing elsewhere. Fitted on its own, such a molecule can land on top of
+the other one. If the optimised shapes cannot make every drawn contact at once, the contacts come out a little
+longer than drawn rather than atoms too close. Nothing is optimised: the first SCAN point relaxes the whole complex
+anyway, and no state needs the complex's energy (a state's energy is the sum of its molecules').
 
 - Each molecule of the complex must be a species of its own, with its atoms listed in the same order in both xyz
   files (the molecules themselves can come in any order). `mechflow validate` lists how each complex is built.
-- `start_built_from_molecules.txt` in the SCAN folder says how far each molecule moved and the closest contact.
+- `start_built_from_molecules.txt` in the SCAN folder says how far each molecule moved, how long the drawn contacts came out
+  and the closest contact.
 - A complex that a mechanism has as a state still gets its own Step 1, as its energy is needed.
 - Step 1 jobs of complexes written before the setting was changed are not used or submitted any more; `mechflow
   status` gives the `scancel` line for any still in Slurm.
