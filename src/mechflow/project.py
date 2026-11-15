@@ -23,6 +23,7 @@ PROJECT_FILE = "project.yaml"
 ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]*$")
 ROLE_OF_PREFIX = OrderedDict([("R", "reactant"), ("I", "intermediate"), ("P", "product"), ("C", "catalyst")])
 RESOURCE_KEYS = ("nprocs", "maxcore", "time", "mem_per_cpu", "partition", "extra_sbatch", "extra_lines", "orca_module")
+ORCA_KEYS = ("keywords",)        # a species' own keywords line for its Step 1 (e.g. a finer grid for one molecule)
 
 
 class ProjectError(Exception):
@@ -313,7 +314,10 @@ class Project:
             sp = Species(sid, path)
             sp.name = str(e.get("name", "") or "")
             sp.role = e.get("role")
-            sp.overrides = {k: v for k, v in e.items() if k in RESOURCE_KEYS}
+            sp.overrides = {k: v for k, v in e.items() if k in RESOURCE_KEYS + ORCA_KEYS}
+            if "keywords" in sp.overrides and not str(sp.overrides["keywords"]).strip().startswith("!"):
+                self.errors.append("species %s: keywords must be an ORCA '!' line, e.g. \"!OPT FREQ VeryTightOPT TightSCF "
+                                   "defgrid3\"" % sid)
             if not path or not os.path.isfile(path):
                 self.errors.append("species %s: no xyz file (expected species/%s.xyz)" % (sid, sid))
                 self.species[sid] = sp

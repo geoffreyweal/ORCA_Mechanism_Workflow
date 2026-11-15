@@ -31,6 +31,8 @@ def job_settings(settings, kind, overrides=None):
     slurm = dict(settings["slurm"])
     for extra in ((settings.get("stage_overrides") or {}).get(kind) or {}, overrides or {}):
         for k, v in extra.items():
+            if k == "keywords":                  # an ORCA keywords line (render_input), not a resource
+                continue
             if k in res:
                 res[k] = v
             else:
@@ -54,7 +56,8 @@ def render_input(settings, kind, xyzfile, charge, mult, scan=None, overrides=Non
         sp = settings.get("single_point") or {}
         out = [x.rstrip() for x in (sp.get("method") or "", sp.get("keywords") or "") if str(x).strip()]
     else:
-        out = [o["method"].rstrip(), o["keywords"][kind].rstrip()]
+        own = (overrides or {}).get("keywords") if kind == "opt" else None      # a species' own Step 1 keywords
+        out = [o["method"].rstrip(), str(own or o["keywords"][kind]).rstrip()]
     for blk in (o.get("scf_block"), o.get("solvent_block")):
         if _block(blk):
             out.append(_block(blk))

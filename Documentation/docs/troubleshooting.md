@@ -45,7 +45,9 @@ maximum, `next` already offers OptTS from the points it has.
 **A species (or a Step 4B end) has an imaginary frequency.**
 It stopped at a saddle point, often with a methyl or phenyl group eclipsed. `mechflow reset --imaginary` restarts
 every such optimisation from its last geometry pushed along the imaginary mode(s), read from `orca.hess`; then
-`mechflow submit`. A very small one (a few cm⁻¹) can come back: it is then numerical noise of the integration grid.
+`mechflow submit`. A very small one (a few cm⁻¹) can come back: it is then numerical noise of the integration grid. Give that species
+a finer grid of its own (`keywords:` in its entry under `species:`, see [Resources](cluster.md#resources)) and
+run `mechflow reset <ID> --imaginary` again.
 
 **CHECK: "the Forwards end is neither … nor …".**
 The IRC led somewhere else. Look at the end structures (`viewORCA opt` in `Step4B_Validate/Forwards`).

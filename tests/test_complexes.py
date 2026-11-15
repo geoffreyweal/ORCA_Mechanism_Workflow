@@ -328,3 +328,25 @@ def test_bimolecular_irc_ends_are_not_optimised(hcn, capsys):
     assert stage == "DONE", detail
     assert "Forwards: the IRC end point as it is (several molecules, not optimised)" in detail
     assert "connects R1 + W (Backwards) and P5 + P6 (Forwards)" in detail
+
+
+def test_species_keywords(hcn, capsys):
+    """A species' own keywords line (e.g. a finer grid for one molecule) is used for its Step 1; a reset after it was
+    added rewrites the input with it; other species and single points keep the project's."""
+    run(hcn, "next", "--no-squeue")
+    fake_orca.finish_ready_jobs(hcn)
+    d = Project.load(hcn).species_job_dir("R1")
+    mode = [0.0] * 9
+    mode[7] = 0.5
+    give_imaginary(d, [0.0] * 6 + [-7.0, 700.0, 2100.0], [[0.1] * 9] * 6 + [mode, [0.1] * 9, [0.1] * 9])
+    y = os.path.join(hcn, "project.yaml")
+    write(y, open(y).read().replace("  R1: hydrogen cyanide\n",
+                                    '  R1: {name: hydrogen cyanide, keywords: "!OPT FREQ VeryTightOPT TightSCF defgrid3"}\n'))
+    p = Project.load(hcn)
+    assert not p.errors and p.species["R1"].overrides == {"keywords": "!OPT FREQ VeryTightOPT TightSCF defgrid3"}
+    run(hcn, "reset", "R1", "--imaginary", "--no-squeue")
+    inp = open(os.path.join(d, "orca.inp")).read()
+    assert "!OPT FREQ VeryTightOPT TightSCF defgrid3" in inp and "defgrid2" not in inp
+    assert "defgrid2" in open(os.path.join(p.species_job_dir("P1"), "orca.inp")).read()
+    write(y, open(y).read().replace('keywords: "!OPT', 'keywords: "OPT'))
+    assert any("keywords must be an ORCA '!' line" in e for e in Project.load(hcn).errors)

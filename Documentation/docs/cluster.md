@@ -44,7 +44,10 @@ slurm:
   extra_sbatch: ["#SBATCH --account=nesi12345"]
 ```
 
-Small species can use fewer cores (`P2: {name: water, nprocs: 4}` in `species:`).
+Small species can use fewer cores (`P2: {name: water, nprocs: 4}` in `species:`). A species can also have a
+keywords line of its own for its Step 1, e.g. a finer integration grid for a molecule whose small imaginary
+frequency does not go away (`C1: {name: catalyst, keywords: "!OPT FREQ VeryTightOPT TightSCF defgrid3"}`);
+`mechflow reset C1 --imaginary` (or `--redo-done`) then runs it again with that line.
 
 ### NUMA settings (Mahuika's Genoa nodes)
 

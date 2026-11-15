@@ -361,8 +361,13 @@ def _restart(project, job, folder, stamp, amplitude=None):
             fh.write(geometry)
         info.setdefault("first_xyz", xyz)
         xyz = RESTART_XYZ
+    overrides = meta.get("overrides")
+    if job.kind == "species" and job.stage == "Step1" and job.item in project.species:
+        overrides = project.species[job.item].overrides           # as project.yaml has them now
+    elif job.kind == "step" and job.item in project.steps:
+        overrides = project.steps[job.item].overrides
     write_job(folder, project.settings, meta["kind"], xyz, meta["charge"], meta["mult"], meta["jobname"],
-              tuple(meta["scan"]) if meta.get("scan") else None, meta.get("overrides"), info)
+              tuple(meta["scan"]) if meta.get("scan") else None, overrides, info)
     if pushed:
         return dest, "restarts from its last geometry %s (%s)" % (pushed, RESTART_XYZ)
     return dest, ("restarts from the last geometry of that attempt (%s)" % RESTART_XYZ if geometry is not None
