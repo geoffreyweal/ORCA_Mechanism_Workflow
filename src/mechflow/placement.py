@@ -27,6 +27,8 @@ POLAR = ("N", "O", "S")
 SKIN = 2.5             # Angstrom: pairs further apart than their limit + SKIN are left out until the next list
 TRIES = 16             # further starts (the first placement turned about its contacts) while the penalty stays high
 GOOD = 0.05            # penalty below which a placement is taken without trying further starts
+TOO_CLOSE = 0.8        # a built complex with atoms of different molecules closer than this x their minimum (apart
+                       # from the drawn contacts) is not used: no SCAN starts from it
 
 
 def _sub(a, b):
@@ -199,3 +201,20 @@ def place(symbols, drawn, start, bodies, bonds, tolerance=chem.BOND_TOLERANCE, s
         if res[1] < best[1]:
             best = res
     return best[0], contact, best[1]
+
+
+def too_close(symbols, coords, part_of, polar, contact, tolerance=chem.BOND_TOLERANCE):
+    """(i, j, distance, minimum) of the pair of atoms of different molecules closest to each other for their minimum,
+    if it is closer than TOO_CLOSE x its minimum (the drawn contacts aside); else None."""
+    keep = {(min(i, j), max(i, j)) for i, j, _ in contact}
+    worst = None
+    n = len(symbols)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if part_of[i] == part_of[j] or (i, j) in keep:
+                continue
+            r = minimum(symbols, polar, i, j, tolerance)
+            d = math.dist(coords[i], coords[j])
+            if d < TOO_CLOSE * r and (worst is None or d / r < worst[2] / worst[3]):
+                worst = (i, j, d, r)
+    return worst

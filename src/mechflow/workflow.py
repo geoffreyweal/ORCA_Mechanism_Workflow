@@ -351,6 +351,14 @@ def _assemble(project, sp, parts, files):
         return None, ("cannot be built from its molecules: even moved apart, their optimised structures put %s and %s "
                       "%.2f A apart (as if bonded); check how the molecules are placed in species/%s.xyz" % (
                           label(i), label(j), chem.distance(mol.coords, i, j), sp.id))
+    near = placement.too_close(sp.mol.symbols, coords, part_of,
+                               placement.polar_hydrogens(sp.mol.symbols, chem.bonds(sp.mol, project.tolerance)),
+                               contact, project.tolerance)
+    if near:
+        i, j, d, r = near
+        return None, ("cannot be built from its molecules: even moved apart, their optimised structures put %s and %s "
+                      "%.2f A apart (too close: they should be at least %.2f A apart); check how the molecules are "
+                      "placed in species/%s.xyz" % (label(i), label(j), d, r, sp.id))
     i, j = min(((a, b) for a in range(len(mol)) for b in range(a + 1, len(mol)) if part_of[a] != part_of[b]),
                key=lambda ab: chem.distance(mol.coords, *ab))
     notes = fits + ["contacts kept from species/%s.xyz: %s" % (sp.id, ", ".join(

@@ -375,3 +375,17 @@ def test_placement_moves_overlapping_molecules_apart():
             assert abs(math.dist(coords[a], coords[b]) - math.dist(water[a - 3], water[b - 3])) < 1e-9
     again = placement.place(symbols, drawn, start, bodies, bonds, seed="C9")[0]
     assert again == coords                                                                 # deterministic
+
+
+def test_a_complex_with_atoms_too_close_is_not_built(hcn, capsys):
+    """placement.too_close finds atoms of different molecules closer than TOO_CLOSE x their minimum (here a water put
+    onto the HCN), which makes assemble refuse the complex; the drawn contacts are left out of the check."""
+    from mechflow import placement
+    symbols = [e for e, _ in HCN + WATER_IN_C9]
+    coords = [p for _, p in HCN] + [(x + 0.9, y - 0.1, z) for _, (x, y, z) in WATER_IN_C9]   # H...O 1.0 A, H...H close
+    part_of = {0: 0, 1: 0, 2: 0, 3: 1, 4: 1, 5: 1}
+    polar = placement.polar_hydrogens(symbols, chem.bonds(chem.Molecule(symbols, coords)))
+    worst = placement.too_close(symbols, coords, part_of, polar, contact=[])
+    assert worst is not None and worst[2] < placement.TOO_CLOSE * worst[3]
+    fine = [p for _, p in HCN + WATER_IN_C9]                                                  # as drawn: H...O 1.90 A
+    assert placement.too_close(symbols, fine, part_of, polar, contact=[(2, 3, 1.90)]) is None

@@ -163,6 +163,11 @@ the other one. If the optimised shapes cannot make every drawn contact at once, 
 longer than drawn rather than atoms too close. Nothing is optimised: the first SCAN point relaxes the whole complex
 anyway, and no state needs the complex's energy (a state's energy is the sum of its molecules').
 
+No SCAN starts from a complex whose molecules still come out too close: closer than 0.8 × that minimum (e.g. two H
+atoms closer than 1.44 Å), or close enough to count as bonded. `mechflow status` then shows the step as waiting,
+names the two atoms and says how far apart they should be; draw the molecules further apart in the complex's xyz
+file. (The SCAN points themselves cannot overlap: each is optimised with only the scanned distance held.)
+
 - Each molecule of the complex must be a species of its own, with its atoms listed in the same order in both xyz
   files (the molecules themselves can come in any order). `mechflow validate` lists how each complex is built.
 - `start_built_from_molecules.txt` in the SCAN folder says how far each molecule moved, how long the drawn contacts came out
