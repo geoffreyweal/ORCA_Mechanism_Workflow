@@ -104,6 +104,49 @@ stage_overrides:
 The single points use the same `scf_block` and `solvent_block` as the DFT jobs, so the solvent model is the same.
 Their resources are those of the job kind `sp` (`stage_overrides.sp`). Off by default.
 
+## imaginary
+
+What to do about an optimisation that finished with imaginary frequencies it should not have: a species or a Step 4B
+end with any, or an OptTS with more than one. Such a structure is a saddle point, often with a methyl or phenyl group
+stuck eclipsed. `mechflow reset --imaginary` restarts it from its last geometry pushed along the mode(s), read from
+`orca.hess` (a TS keeps its largest mode, the reaction's). With `auto: true`, `mechflow next`, and so the
+[chain](cluster.md#jobs-that-start-the-next-ones-chain), does this by itself:
+
+```yaml
+imaginary:
+  auto: true          # 'mechflow next' restarts them by itself (default false: you run 'mechflow reset --imaginary')
+  max_pushes: 2       # at most this many times per job; after that it waits for you
+  amplitude: 0.3      # Angstrom: how far the atom that moves most in the mode(s) is pushed
+```
+
+A very small imaginary frequency (a few cm⁻¹) that comes back after a push is usually numerical noise of the
+integration grid.
+
+## complexes
+
+A complex is a species of more than one molecule, for example a substrate hydrogen-bonded to an acid, from which a
+proton-transfer SCAN starts. By default every complex gets its own Step 1 optimisation, as every species does in the
+procedure. With
+
+```yaml
+complexes:
+  optimise: false
+```
+
+a complex that is only the start of a SCAN gets no Step 1. When its SCAN starts, mechflow builds it from the
+optimised structures (Step 1) of its molecules: each molecule is fitted onto the place the complex's xyz file has it,
+weighted towards its atoms near the other molecules, so the contact you drew (the hydrogen bond the SCAN starts
+from) stays as it was. The first SCAN point relaxes the whole complex anyway, and no state needs the complex's
+energy (a state's energy is the sum of its molecules').
+
+- Each molecule of the complex must be a species of its own, with its atoms listed in the same order in both xyz
+  files (the molecules themselves can come in any order). `mechflow validate` lists how each complex is built.
+- `start_built_from_molecules.txt` in the SCAN folder says how far each molecule moved and the closest contact.
+- A complex that a mechanism has as a state still gets its own Step 1, as its energy is needed.
+- Step 1 jobs of complexes written before the setting was changed are not used or submitted any more; `mechflow
+  status` gives the `scancel` line for any still in Slurm.
+- A built complex has no energy of its own, so `steps.csv` gives no barrier from the SCAN start for its steps.
+
 ## resources, slurm and stage_overrides
 
 ```yaml

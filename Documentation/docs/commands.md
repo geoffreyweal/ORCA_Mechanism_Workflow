@@ -17,6 +17,7 @@ Run every command inside a project folder (or any folder below it), or give `-p 
 | `mechflow chain` | `next` + `submit` under a lock: what each finished job runs when `chain.enabled` ([details](cluster.md#jobs-that-start-the-next-ones-chain)) |
 | `mechflow reset` | sets every failed job up to run again; the old files go into `failed_attempts/` ([details](cluster.md#when-jobs-fail)) |
 | `mechflow reset S5 --stage OptTS --redo-done --from-scratch --downstream` | redoes the OptTS of S5 (and everything after it) from the beginning |
+| `mechflow reset --imaginary` | redoes every optimisation that finished with imaginary frequencies it should not have, from its last geometry pushed along those modes |
 | `mechflow submit --limit 50` | at most 50 jobs |
 | `mechflow status [--brief]` | the state of every species and step; `--brief` hides finished ones |
 | `mechflow check FOLDER` | the procedure's checks on any ORCA job folder |

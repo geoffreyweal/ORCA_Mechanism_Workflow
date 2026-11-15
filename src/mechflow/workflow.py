@@ -68,6 +68,8 @@ def species_setup(project, sp, queue=None):
     """Write the Step 1 job of a species when it is missing (or refresh it before it is submitted).
 
     Returns (message or None, is_warning)."""
+    if assembled(project, sp):
+        return None, False             # no Step 1: its SCANs start from its molecules' optimised structures
     d = project.species_job_dir(sp.id)
     start = os.path.join(d, "start_structure.xyz")
     state = job_state(d, queue)
@@ -107,7 +109,8 @@ def species_result(project, sp, queue=None):
         if not r["opt_converged"]:
             res["note"] = "optimisation did not converge"
         elif r["imag"]:
-            res["note"] = "%d imaginary frequency(ies): %s" % (len(r["imag"]), ", ".join("%.1f" % f for f in r["imag"]))
+            res["note"] = "%d imaginary frequency(ies): %s (%s)" % (
+                len(r["imag"]), ", ".join("%.1f" % f for f in r["imag"]), imaginary_hint(project, sp.id, d))
         elif r["gibbs"] is None:
             res["note"] = "no Gibbs free energy in output.out"
         elif not os.path.isfile(xyz):
@@ -168,15 +171,193 @@ def molecules(project, sp):
     return len(chem.fragments(len(sp.mol), chem.bonds(sp.mol, project.tolerance)))
 
 
+def is_state(project, sp):
+    """Whether a mechanism has the species in one of its states (other than as the start of a TS's SCAN)."""
+    return any(sp.id in s.full for m in project.mechanisms.values() for s in m.states if s.kind != "ts")
+
+
 def sp_needed(project, sp):
     """Whether a species gets a single point. A species of more than one molecule (a complex, such as the start of a
     SCAN) needs none: a state's energy is the sum of its molecules' energies, and a TS's state counts the TS in place of
-    its start. The exceptions: a mechanism has the complex itself as a state, or single_point.complexes is true."""
+    its start. The exceptions: a mechanism has the complex itself as a state, or single_point.complexes is true. A
+    complex built from its molecules (complexes.optimise: false) has no optimised structure, so never gets one."""
+    if assembled(project, sp):
+        return False
     if (project.settings.get("single_point") or {}).get("complexes"):
         return True
     if molecules(project, sp) <= 1:
         return True
-    return any(sp.id in s.full for m in project.mechanisms.values() for s in m.states if s.kind != "ts")
+    return is_state(project, sp)
+
+
+# ============================================================================== complexes built from their molecules
+
+def imaginary_settings(project):
+    """(auto, max_pushes, amplitude) of the imaginary section"""
+    s = project.settings.get("imaginary") or {}
+    return bool(s.get("auto")), int(s.get("max_pushes", 2)), float(s.get("amplitude", 0.3))
+
+
+def pushes(folder):
+    """how many times a job was restarted pushed along its imaginary modes"""
+    return int((read_meta(folder) or {}).get("pushed", 0))
+
+
+def imaginary_hint(project, item, folder):
+    """what to do about an optimisation with imaginary frequencies it should not have"""
+    auto, most, _ = imaginary_settings(project)
+    done = pushes(folder)
+    if auto and done < most:
+        return "'mechflow next' redoes it pushed along the mode (push %d of %d)" % (done + 1, most)
+    if done:
+        return "pushed %d time(s) already; 'mechflow reset %s --imaginary' pushes it again" % (done, item)
+    return "'mechflow reset %s --imaginary' redoes it, pushed along the mode" % item
+
+
+def optimise_complexes(project):
+    """complexes.optimise (default true): give complexes a Step 1 optimisation of their own."""
+    return bool((project.settings.get("complexes") or {}).get("optimise", True))
+
+
+def assembled(project, sp):
+    """A complex that gets no Step 1 of its own (complexes.optimise: false): a species of more than one molecule that
+    no mechanism has as a state (e.g. the start of a SCAN, such as a substrate hydrogen-bonded to an acid). Its SCANs
+    start from its molecules' own optimised structures, put where the complex's xyz file has them (assemble)."""
+    if optimise_complexes(project) or sp.mol is None:
+        return False
+    cache = project.__dict__.setdefault("_assembled", {})
+    if sp.id not in cache:
+        cache[sp.id] = molecules(project, sp) > 1 and not is_state(project, sp)
+    return cache[sp.id]
+
+
+def _atom_range(idx, base):
+    runs, start = [], None
+    for k, a in enumerate(idx):
+        if start is None:
+            start = a
+        if k + 1 == len(idx) or idx[k + 1] != a + 1:
+            runs.append("%d" % (start + base) if start == a else "%d-%d" % (start + base, a + base))
+            start = None
+    return ",".join(runs)
+
+
+def complex_parts(project, sp):
+    """[(species ID, atom numbers in the complex)] for each molecule of a complex: the species of one molecule with the
+    same atoms and bonds, listed in the same order in its own xyz file. If several species fit (conformers or
+    stereoisomers), the one closest in shape is taken. ValueError when a molecule fits none."""
+    cache = project.__dict__.setdefault("_complex_parts", {})
+    if sp.id in cache:
+        if isinstance(cache[sp.id], Exception):
+            raise cache[sp.id]
+        return cache[sp.id]
+    try:
+        out = _complex_parts(project, sp)
+    except ValueError as exc:
+        cache[sp.id] = exc
+        raise
+    cache[sp.id] = out
+    return out
+
+
+def _complex_parts(project, sp):
+    singles = project.__dict__.get("_single_molecules")
+    if singles is None:
+        singles = {}
+        for other in project.species.values():
+            if other.mol is not None and molecules(project, other) == 1:
+                singles.setdefault(chem.molecule_fingerprint(other.mol, project.tolerance), []).append(other)
+        project.__dict__["_single_molecules"] = singles
+    bonds = chem.bonds(sp.mol, project.tolerance)
+    out = []
+    for frag in chem.fragments(len(sp.mol), bonds):
+        idx = sorted(frag)
+        sub = chem.Molecule([sp.mol.symbols[a] for a in idx], [sp.mol.coords[a] for a in idx])
+        what = "the molecule %s of %s (atoms %s)" % (chem.formula_string(chem.formula_of(sub.symbols)), sp.id,
+                                                     _atom_range(idx, project.index_base))
+        cands = [c for c in singles.get(chem.molecule_fingerprint(sub, project.tolerance), []) if c.id != sp.id]
+        if not cands:
+            raise ValueError("%s is not a species of the project, so it cannot be optimised on its own: add it as a "
+                             "species (an xyz file of its own), or set complexes.optimise: true" % what)
+        pos = {a: k for k, a in enumerate(idx)}
+        own = set((pos[i], pos[j]) for i, j in bonds if i in pos and j in pos)
+        fits = [c for c in cands if c.mol.symbols == sub.symbols and chem.bonds(c.mol, project.tolerance) == own]
+        if not fits:
+            raise ValueError("%s is %s, but its atoms are listed in another order: list them as in species/%s.xyz" % (
+                what, " or ".join(c.id for c in cands), cands[0].id))
+        if len(fits) > 1:
+            def shape(c):
+                rot, t = chem.superpose(c.mol.coords, sub.coords)
+                return chem.rmsd(chem.transform(c.mol.coords, rot, t), sub.coords)
+            fits.sort(key=shape)
+        out.append((fits[0].id, idx))
+    return out
+
+
+CONTACT_SCALE = 3.0      # Angstrom: atoms this much further from the other molecules count e (2.7) times less in the fit
+
+
+def assemble(project, sp, queue=None):
+    """The structure of a complex built from its molecules: each molecule's optimised structure (Step 1) is fitted onto
+    the place the complex's xyz file has that molecule, weighted towards its atoms near the other molecules, so that the
+    contacts drawn in the complex (e.g. the hydrogen bond a SCAN starts from) stay as they were.
+
+    Returns (Molecule, notes) - or (None, why) while a molecule has no usable optimised structure yet."""
+    try:
+        parts = complex_parts(project, sp)
+    except ValueError as exc:
+        return None, "cannot be built from its molecules: %s" % exc
+    waiting = []
+    for pid, _ in parts:
+        r = species_result(project, project.species[pid], queue)
+        if not r["ok"]:
+            waiting.append("%s (%s)" % (pid, r["note"] or r["state"]))
+    if waiting:
+        return None, "waiting for Step 1 of %s" % ", ".join(waiting)
+    coords = [None] * len(sp.mol)
+    fits = []
+    for pid, idx in parts:
+        opt = chem.read_xyz(species_result(project, project.species[pid], queue)["xyz"])
+        mine = set(idx)
+        others = [c for a, c in enumerate(sp.mol.coords) if a not in mine]
+        target = [sp.mol.coords[a] for a in idx]
+        w = [math.exp(-min(math.dist(c, o) for o in others) / CONTACT_SCALE) + 1e-3 for c in target] if others else None
+        rot, t = chem.superpose(opt.coords, target, w)
+        placed = chem.transform(opt.coords, rot, t)
+        for k, a in enumerate(idx):
+            coords[a] = placed[k]
+        fits.append("%s (moved %.2f A on average from where species/%s.xyz has it)" % (pid, chem.rmsd(placed, target), sp.id))
+    mol = chem.Molecule(sp.mol.symbols, coords, "%s built from the optimised %s" % (sp.id, " + ".join(p for p, _ in parts)))
+    part_of = {}
+    for k, (_, idx) in enumerate(parts):
+        for a in idx:
+            part_of[a] = k
+    clash = [(i, j) for i, j in chem.bonds(mol, project.tolerance) if part_of[i] != part_of[j]]
+    if clash:
+        i, j = clash[0]
+        return None, ("cannot be built from its molecules: their optimised structures put %s and %s %.2f A apart (as "
+                      "if bonded); move the molecules further apart in species/%s.xyz" % (
+                          project.atom_label(mol, i), project.atom_label(mol, j), chem.distance(mol.coords, i, j), sp.id))
+    i, j = min(((a, b) for a in range(len(mol)) for b in range(a + 1, len(mol)) if part_of[a] != part_of[b]),
+               key=lambda ab: chem.distance(mol.coords, *ab))
+    notes = fits + ["closest contact between molecules: %s...%s %.2f A (%.2f A in species/%s.xyz)" % (
+        project.atom_label(mol, i), project.atom_label(mol, j), chem.distance(mol.coords, i, j),
+        chem.distance(sp.mol.coords, i, j), sp.id)]
+    return mol, notes
+
+
+def start_structure(project, sid, queue=None):
+    """The structure a SCAN starts from: the optimised species, or a complex built from its optimised molecules.
+    Returns {"ok", "note", "mol", "xyz" (a file, or None for a built complex), "built" (notes, or None)}."""
+    sp = project.species[sid]
+    if assembled(project, sp):
+        mol, notes = assemble(project, sp, queue)
+        if mol is None:
+            return {"ok": False, "note": notes, "mol": None, "xyz": None, "built": None}
+        return {"ok": True, "note": "", "mol": mol, "xyz": None, "built": notes}
+    r = species_result(project, sp, queue)
+    return {"ok": r["ok"], "note": r["note"] or r["state"], "mol": chem.read_xyz(r["xyz"]) if r["ok"] else None,
+            "xyz": r["xyz"] if r["ok"] else None, "built": None}
 
 
 def sp_setup(project, item, kind="species", queue=None):
@@ -315,14 +496,17 @@ def scan_profile_text(pts, mark=None, width=46):
 def step_progress(project, st, queue=None):
     """(stage, detail, action) for a step. action is what 'next' would prepare, or None."""
     sd = project.step_dir(st.id)
-    sres = species_result(project, project.species[st.start], queue)
     scan_dirs = scan_folders(sd)
     s2 = job_state(scan_dirs[-1], queue)
     if s2 == "absent":
+        sres = start_structure(project, st.start, queue)
+        if sres["built"] is not None:
+            return "SCAN", "start structure %s built from its optimised molecules" % st.start, "prepare_scan"
         if sres["ok"]:
             return "SCAN", "start structure %s optimised" % st.start, "prepare_scan"
-        why = sres["note"] or sres["state"]
-        return "waiting", "for Step 1 of %s (%s)" % (st.start, why), None
+        if assembled(project, project.species[st.start]):
+            return "waiting", "for %s: %s" % (st.start, sres["note"]), None
+        return "waiting", "for Step 1 of %s (%s)" % (st.start, sres["note"]), None
     if s2 in ("ready", "submitted", "running"):
         return "SCAN", s2, None
     i, j = st.atoms
@@ -350,8 +534,10 @@ def step_progress(project, st, queue=None):
         return "OptTS", "did not converge / failed (%s) - see %s/output.out" % (
             slurm_problem(t3) or "ORCA", OPTTS), None
     if len(r3["imag"]) != 1:
-        return "OptTS", "%d imaginary frequencies (%s): a TS has exactly 1" % (
-            len(r3["imag"]), ", ".join("%.0f" % f for f in r3["imag"])), None
+        return "OptTS", "%d imaginary frequencies (%s): a TS has exactly 1%s" % (
+            len(r3["imag"]), ", ".join("%.0f" % f for f in r3["imag"]),
+            " (%s)" % imaginary_hint(project, st.id, t3).replace("the mode", "the extra mode")
+            if len(r3["imag"]) > 1 else ""), None
     t4a = os.path.join(sd, IRC)
     s4a = job_state(t4a, queue)
     if s4a == "absent":
@@ -399,7 +585,7 @@ def validate_4b(project, st, queue=None):
             msgs.append("%s did not converge" % side)
         if r["imag"]:
             ok = False
-            msgs.append("%s has %d imaginary frequency(ies)" % (side, len(r["imag"])))
+            msgs.append("%s has %d imaginary frequency(ies) (%s)" % (side, len(r["imag"]), imaginary_hint(project, st.id, d)))
         try:
             ends[side] = chem.read_xyz(os.path.join(d, "orca.xyz"))
         except (OSError, chem.XYZError):
@@ -451,11 +637,21 @@ def prepare(project, st, action, image=None):
     sd = project.step_dir(st.id)
     i, j = st.atoms
     if action == "prepare_scan":
-        sres = species_result(project, project.species[st.start])
+        sres = start_structure(project, st.start)
+        if not sres["ok"]:
+            raise ValueError("the start structure %s is not ready: %s" % (st.start, sres["note"]))
         folder = os.path.join(sd, SCAN)
         os.makedirs(folder, exist_ok=True)
-        shutil.copy(sres["xyz"], os.path.join(folder, "start_opt.xyz"))
-        mol = chem.read_xyz(sres["xyz"])
+        mol = sres["mol"]
+        if sres["xyz"]:
+            shutil.copy(sres["xyz"], os.path.join(folder, "start_opt.xyz"))
+        else:
+            chem.write_xyz(os.path.join(folder, "start_opt.xyz"), mol, "%s  charge=%d mult=%d" % (
+                mol.comment, st.charge, st.mult))
+            with open(os.path.join(folder, "start_built_from_molecules.txt"), "w") as fh:
+                fh.write("start_opt.xyz is %s built from the optimised structures (Step 1) of its molecules, each fitted "
+                         "onto where species/%s.xyz has it (complexes.optimise: false):\n%s\n" % (
+                             st.start, st.start, "\n".join("  " + n for n in sres["built"])))
         d0 = round(chem.distance(mol.coords, i, j), 3)
         n = max(int(round(abs(st.to - d0) / st.scan_step)) + 1, 3)
         d1 = d0 + math.copysign(st.scan_step * (n - 1), st.to - d0)
@@ -518,7 +714,10 @@ def _write_step_info(project, st):
     lines = ["%s  (transition state %s)" % (st.id, st.ts), st.name, "",
              "Reaction:      %s" % st.reaction_text(),
              "Used by:       %s" % (", ".join(st.used_by) or "-"),
-             "SCAN starts from the optimised structure of %s (calcs/Species/%s/%s/orca.xyz)" % (st.start, st.start, STEP1),
+             ("SCAN starts from %s built from the optimised structures of its molecules (%s), placed as in species/%s.xyz"
+              % (st.start, " + ".join(p for p, _ in complex_parts(project, sp)), st.start)
+              if assembled(project, sp) else
+              "SCAN starts from the optimised structure of %s (calcs/Species/%s/%s/orca.xyz)" % (st.start, st.start, STEP1)),
              "SCAN distance: %s-%s (atoms numbered from %d, as in project.yaml; ORCA's input counts from 0), "
              "%s to %.2f A in %.3f A steps" % (
                  project.atom_label(sp.mol, i), project.atom_label(sp.mol, j), project.index_base,
@@ -581,7 +780,8 @@ def restart_scan(project, st):
 def job_folders(project, species, steps, with_sp=True):
     """Every job folder of the chosen species and steps, in a sensible order (with_sp=False: not the single points)."""
     for sp in species:
-        yield project.species_job_dir(sp.id)
+        if not assembled(project, sp):           # (a built complex's Step 1, written earlier, is not submitted)
+            yield project.species_job_dir(sp.id)
         if with_sp and sp_needed(project, sp):   # (a complex's single point, written by an older mechflow, is not submitted)
             yield species_sp_dir(project, sp.id)
     for st in steps:

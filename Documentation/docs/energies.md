@@ -46,7 +46,8 @@ A species of more than one molecule (a complex, such as a SCAN that starts from 
 none: a state's energy is the sum of its molecules' energies, and a TS's state counts the TS in place of its start.
 A complex that a mechanism has as a state gets one anyway, and `single_point.complexes: true` gives every complex
 one. Without its single point, a complex has no energy at this level, so `steps.csv`'s barrier from the SCAN start
-(`dG_act_from_start`) is then only given with `--level dft`.
+(`dG_act_from_start`) is then only given with `--level dft`. A complex built from its molecules
+([`complexes.optimise: false`](project_file.md#complexes)) has no energy at either level.
 Once single points have finished, `collect` uses the composite free energy
 
     G = E(SP) + [G - E(el)]

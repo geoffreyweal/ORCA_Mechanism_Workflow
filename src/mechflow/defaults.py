@@ -70,6 +70,28 @@ single_point:
                           # none: a state's energy is the sum of its molecules' (a complex that is itself a state of
                           # a mechanism gets one anyway)
 
+# -------------------------------------------------------------------------------------
+# Imaginary frequencies where there should be none (a species or a Step 4B end: any; a TS: more than
+# one). 'mechflow reset --imaginary' restarts such an optimisation from its last geometry pushed along
+# the mode(s), read from orca.hess. With auto: true, 'mechflow next' (and so the chain) does that by
+# itself, at most max_pushes times per job; after that the job waits for you.
+# -------------------------------------------------------------------------------------
+imaginary:
+  auto: false
+  max_pushes: 2
+  amplitude: 0.3          # Angstrom: how far the atom that moves most in the mode(s) is pushed
+
+# -------------------------------------------------------------------------------------
+# Complexes: species of more than one molecule that are only the start of a SCAN (e.g. a substrate
+# hydrogen-bonded to an acid). With optimise: false they get no Step 1 of their own: each SCAN starts
+# from the complex built from its molecules' optimised structures (each molecule is a species of its
+# own, its atoms listed in the same order), every molecule placed where the complex's xyz file has it.
+# The first SCAN point relaxes the complex anyway, and no state's energy needs it (a state is the sum
+# of its molecules). A complex that a mechanism has as a state is always optimised.
+# -------------------------------------------------------------------------------------
+complexes:
+  optimise: true          # false: build the complexes from their optimised molecules (saves their Step 1)
+
 resources:
   nprocs: 32              # cores per job (%PAL NPROCS and --ntasks)
   maxcore: 2000           # MB per core (%maxcore)

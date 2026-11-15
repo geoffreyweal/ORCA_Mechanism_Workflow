@@ -8,8 +8,8 @@ again is always safe.
 
 | finished stage | checks (from the procedure) | writes |
 |---|---|---|
-| (nothing yet) | | `calcs/Species/<ID>/Step1_Geo_Opt`: Step 1 optimisation of every species |
-| Step 1 | ORCA terminated normally; optimisation converged; no imaginary frequency; bonds as in your xyz file | `calcs/Steps/<ID>/Step2Ba_SCAN` for every step that starts from this species |
+| (nothing yet) | | `calcs/Species/<ID>/Step1_Geo_Opt`: Step 1 optimisation of every species (with `complexes.optimise: false`, not of the [complexes](project_file.md#complexes) built from their molecules) |
+| Step 1 | ORCA terminated normally; optimisation converged; no imaginary frequency; bonds as in your xyz file | `calcs/Steps/<ID>/Step2Ba_SCAN` for every step that starts from this species (or from a complex built from it and the other molecules, once they are all optimised) |
 | Step 2Ba SCAN | the energy has a maximum inside the SCAN (all SCAN parts combined) | `Step3_Opt_TS` from the highest maximum (`TS_guess_from_SCAN.txt` says which point) |
 | Step 3 OptTS | converged; exactly one imaginary frequency | `Step4A_IRC` from the optimised TS |
 | Step 4A IRC | both IRC end points written | `Step4B_Validate/Forwards` and `Backwards` |
@@ -65,9 +65,10 @@ These are your decisions, as in the procedure, and mechflow points them out:
 | `no energy maximum` | The SCAN is barrierless, or did not go far enough. Look at it with `mechflow scan-profile S5`. Then change `scan.to` or the atoms and run `mechflow reset S5 --stage SCAN --redo-done --from-scratch`, then `next` |
 | `the SCAN stopped early` | `mechflow reset S5`: the procedure's restart (see below) |
 | the wrong SCAN point chosen | `mechflow next S5 --image 57 --force`. The old OptTS folder is kept as `Step3_Opt_TS_old1` |
-| `2 imaginary frequencies` | Look at the modes; restart OptTS from a better point (`--image`) or from the displaced structure |
+| species or Step 4B: `imaginary frequency` | A saddle point, not a minimum (often a methyl or phenyl group stuck eclipsed). `mechflow reset --imaginary` restarts every such optimisation from its last geometry pushed along the imaginary mode(s) (0.3 Å for the atom that moves most; `--amplitude` changes it), then `mechflow submit`. With [`imaginary.auto: true`](project_file.md#imaginary), `mechflow next` does this by itself (twice at most) |
+| OptTS: `2 imaginary frequencies` | Look at the modes. `mechflow reset S5 --imaginary` restarts the OptTS pushed along the extra mode(s) (every one but the largest, the reaction's); or restart it from a better SCAN point (`--image`) |
 | `CHECK` after Step 4B | The TS does not connect the two sides of the reaction you wrote. Look at both ends (`viewORCA opt`). If the result is right, run `mechflow accept S5`; if not, the step needs another SCAN coordinate |
-| species `bonds changed during the optimisation` | The species is not stable as drawn. Fix the xyz file, or run `mechflow accept I2a` |
+| species `bonds changed during the optimisation` | The species is not stable as drawn. Often a proton was hydrogen-bonded to a better base in the start structure and moved over: turn it away from that atom (or draw another conformer) in the xyz file and run `mechflow reset I2a --redo-done --from-scratch --downstream`. If the new structure is what you want, run `mechflow accept I2a` |
 
 ## Restarting a SCAN
 

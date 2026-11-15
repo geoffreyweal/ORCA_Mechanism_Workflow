@@ -25,10 +25,11 @@ from . import __version__, chem, network
 from . import reset as resets
 from .defaults import PROTON_TRANSFER_MODES, SETTINGS_YAML
 from .energies import Energies, collect
-from .orca import SUBMITTED, Queue, job_state, parse_output, slurm_problem
+from .orca import SUBMITTED, Queue, job_ids, job_state, parse_output, slurm_problem
 from .project import PROJECT_FILE, Project, ProjectError, expression, find_project, match_any, species_sort_key
 from .report import overview, plural
-from .workflow import (ACCEPTED, VALIDATE, job_folders, prepare, refresh, restart_scan, retire, scan_maximum,
+from .workflow import (ACCEPTED, VALIDATE, assembled, complex_parts, imaginary_settings, job_folders, prepare, pushes,
+                       refresh, restart_scan, retire, scan_maximum,
                        scan_points, scan_profile_text, sp_auto, sp_enabled, sp_needed, sp_plan, sp_setup, species_result,
                        species_setup, species_sp_dir, step_progress, step_sp_dir)
 
@@ -152,6 +153,17 @@ def cmd_validate(args):
     if args.verbose:
         for n in p.notes:
             print("note:    " + n)
+    built = [sp for sp in p.species.values() if assembled(p, sp)]
+    for sp in built:
+        try:
+            complex_parts(p, sp)
+        except ValueError as exc:
+            p.errors.append("complex %s: %s" % (sp.id, exc))
+            print("ERROR:   complex %s: %s" % (sp.id, exc))
+    if built:
+        print("note:    %d complex(es) are built from their optimised molecules (complexes.optimise: false): %s" % (
+            len(built), ", ".join("%s = %s" % (sp.id, " + ".join(pid for pid, _ in complex_parts(p, sp)))
+                                  for sp in built if _parts_ok(p, sp))))
     unused_sp = [s for s, sp in p.species.items() if not sp.used_by]
     unused_st = [s for s, st in p.steps.items() if not st.used_by]
     if unused_sp:
@@ -174,6 +186,14 @@ def cmd_validate(args):
     print("No problems found." if not p.warnings else "No errors (%d warning(s))." % len(p.warnings))
 
 
+def _parts_ok(p, sp):
+    try:
+        complex_parts(p, sp)
+        return True
+    except ValueError:
+        return False
+
+
 # ============================================================================== progress
 
 def cmd_status(args):
@@ -184,6 +204,12 @@ def cmd_status(args):
     if not args.steps_only and species:
         print("SPECIES (Step 1 optimisation)")
         for sp in species:
+            if assembled(p, sp):
+                label, note = _built_status(p, sp, q)
+                counts["species " + label] += 1
+                if not (args.brief and label == "built"):
+                    print("  %-7s %-10s %s" % (sp.id, label, note))
+                continue
             r = species_result(p, sp, q)
             label = "ok" if r["ok"] else ("CHECK" if r["state"] == "finished" else r["state"])
             counts["species " + label] += 1
@@ -219,10 +245,39 @@ def cmd_status(args):
     print("\nSpecies: %s\nSteps:   %s" % (sp_c or "-", st_c or "-"))
     if counts.get("species absent"):
         print("(%d species have no Step 1 input yet: run 'mechflow next')" % counts["species absent"])
+    built = [sp for sp in species if assembled(p, sp)]
+    if built:
+        print("(%d complex(es) are built from their optimised molecules when their SCANs start: complexes.optimise is false)"
+              % len(built))
+    stale = [sp for sp in built if job_state(p.species_job_dir(sp.id), q) in ("submitted", "running")]
+    if stale:
+        ids = sorted(set(i for sp in stale for i in job_ids(p.species_job_dir(sp.id))))
+        print("%d of them still have a Step 1 job in Slurm, written before, that is not needed%s" % (
+            len(stale), (": scancel " + " ".join(ids)) if ids else ""))
     failed = resets.plan(p, resets.select_jobs(p, [] if args.steps_only else species, steps), q)[0]
     if failed:
         print("%d failed job(s): 'mechflow reset' sets them up to run again, then 'mechflow submit' "
               "('mechflow reset --dry-run' shows what it would do)." % len(failed))
+
+
+def _built_status(p, sp, q):
+    """(label, note) of a complex built from its optimised molecules (complexes.optimise: false)."""
+    try:
+        parts = " + ".join(pid for pid, _ in complex_parts(p, sp))
+    except ValueError as exc:
+        return "CHECK", "cannot be built from its molecules: %s" % exc
+    waiting = [pid for pid in parts.split(" + ") if not species_result(p, p.species[pid], q)["ok"]]
+    if waiting:
+        label, note = "waiting", "built from %s (no Step 1 of its own); waiting for Step 1 of %s" % (parts, ", ".join(waiting))
+    else:
+        label, note = "built", "built from the optimised %s when its SCAN starts (no Step 1 of its own)" % parts
+    d = p.species_job_dir(sp.id)
+    old = job_state(d, q)
+    if old in ("submitted", "running"):
+        ids = sorted(job_ids(d))
+        note += "; its own Step 1 job (written before) is not needed: scancel %s" % " ".join(ids) if ids else \
+            "; its own Step 1 job (written before) is %s but not needed" % old
+    return label, note
 
 
 def cmd_next(args):
@@ -269,6 +324,7 @@ def cmd_next(args):
                 n_st += 1
             except (ValueError, OSError) as exc:
                 print("%-7s could not prepare %s: %s" % (st.id, stage, exc))
+    n_push = _auto_push(p, species, steps, q)
     n_sp_jobs = 0
     if sp_auto(p):                 # single_point.auto: the single points (SP) of every optimised species and TS
         for item, kind, lab in [(sp, "species", sp.id) for sp in species] + [(st, "step", st.id) for st in steps]:
@@ -276,8 +332,32 @@ def cmd_next(args):
             if msg:
                 print("%-7s %s" % (lab, msg))
                 n_sp_jobs += 1
-    print("\nPrepared %d species, %d step stage(s) and %d single point(s). Next: mechflow submit" % (n_sp, n_st, n_sp_jobs)
-          if (n_sp or n_st or n_sp_jobs) else "\nNothing new to prepare (see 'mechflow status').")
+    print("\nPrepared %d species, %d step stage(s), %d single point(s)%s. Next: mechflow submit" % (
+        n_sp, n_st, n_sp_jobs, " and %d restart(s) pushed along imaginary modes" % n_push if n_push else "")
+          if (n_sp or n_st or n_sp_jobs or n_push) else "\nNothing new to prepare (see 'mechflow status').")
+
+
+def _auto_push(p, species, steps, q):
+    """imaginary.auto: restart every optimisation that finished with imaginary frequencies it should not have from its
+    last geometry pushed along them, at most imaginary.max_pushes times per job. Returns how many were restarted."""
+    auto, most, amplitude = imaginary_settings(p)
+    if not auto:
+        return 0
+    actions, _ = resets.plan(p, resets.select_jobs(p, species, steps), q, imaginary=True)
+    stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    n = 0
+    for job, how, why in actions:
+        done = pushes(job.folder)
+        if done >= most:
+            continue                             # status says it needs you
+        try:
+            _, what = resets.apply(p, job, how, stamp, amplitude)
+        except (OSError, ValueError) as exc:
+            print("%-7s %s %s: could not be pushed (%s)" % (job.item, job.stage, why, exc))
+            continue
+        print("%-7s %s %s: %s (push %d of %d)" % (job.item, job.stage, why, what, done + 1, most))
+        n += 1
+    return n
 
 
 def _submit_once(folder):
@@ -359,6 +439,12 @@ def cmd_reset(args):
     except ValueError as exc:
         _die(str(exc))
     filtered = bool(args.mech or args.product or args.step or args.species)
+    if args.imaginary and args.from_scratch:
+        _die("--imaginary restarts from the last geometry pushed along the imaginary modes, so not with --from-scratch")
+    if args.amplitude is None:
+        args.amplitude = imaginary_settings(p)[2]
+    if args.imaginary and not args.amplitude:
+        _die("--amplitude must not be 0")
     if args.redo_done and not (args.ids or filtered):
         _die("--redo-done also resets jobs that finished, so name them: species or step IDs (or --species, --step, "
              "--mech or --product)")
@@ -376,15 +462,15 @@ def cmd_reset(args):
     q = Queue(enabled=not args.no_squeue)
     actions, notes = resets.plan(p, resets.select_jobs(p, species, steps, stages), q, redo_done=args.redo_done,
                                  from_scratch=args.from_scratch, downstream_too=args.downstream, force=args.force,
-                                 named=bool(args.ids or filtered or stages), stages=stages)
+                                 named=bool(args.ids or filtered or stages), stages=stages, imaginary=args.imaginary)
     stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
     n, scratch = 0, False
     for job, how, why in actions:
         if args.dry_run:
-            what = resets.describe(job, how)
+            what = resets.describe(job, how, args.amplitude)
         else:
             try:
-                dest, what = resets.apply(p, job, how, stamp)
+                dest, what = resets.apply(p, job, how, stamp, args.amplitude)
             except (OSError, ValueError) as exc:
                 print("%-7s %-6s %-28s NOT reset: %s" % (job.item, job.stage, why, exc))
                 continue
@@ -396,8 +482,9 @@ def cmd_reset(args):
     for note in notes:
         print("note: " + note)
     if not actions:
-        print("Nothing to reset%s." % ("" if args.redo_done else
-                                       " (only failed jobs are reset: add --redo-done, with IDs, to redo finished ones)"))
+        print("Nothing to reset%s." % (
+            " (no finished optimisation has imaginary frequencies it should not have)" if args.imaginary else
+            "" if args.redo_done else " (only failed jobs are reset: add --redo-done, with IDs, to redo finished ones)"))
         return
     if args.dry_run:
         print("\n%d job(s) would be reset (dry run: nothing was changed)." % n)
@@ -706,6 +793,12 @@ def build_parser():
     q.add_argument("--force", action="store_true",
                    help="also reset submitted jobs whose state is unknown because squeue could not be asked "
                         "(make sure they are not running)")
+    q.add_argument("--imaginary", action="store_true",
+                   help="redo the optimisations that finished with imaginary frequencies they should not have (a "
+                        "minimum: any; a TS: more than one), from their last geometry pushed along those modes")
+    q.add_argument("--amplitude", type=float,
+                   help="with --imaginary: how far (Angstrom) the atom that moves most is pushed (default: "
+                        "imaginary.amplitude, 0.3; negative: the other way)")
     q.add_argument("--dry-run", "--dry_run", dest="dry_run", action="store_true",
                    help="show what would be reset, without changing anything")
     q.set_defaults(func=cmd_reset)

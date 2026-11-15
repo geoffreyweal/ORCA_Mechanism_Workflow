@@ -272,3 +272,76 @@ def fragment_fingerprints(mol, tolerance=BOND_TOLERANCE):
 def molecule_fingerprint(mol, tolerance=BOND_TOLERANCE):
     """One fingerprint for the whole structure (all fragments)."""
     return _h("+".join(h for h, _ in fragment_fingerprints(mol, tolerance)))
+
+
+# ------------------------------------------------------------------------------ fitting one structure onto another
+
+def _jacobi_top_eigenvector(a):
+    """Eigenvector of the largest eigenvalue of a small symmetric matrix (cyclic Jacobi rotations)."""
+    n = len(a)
+    a = [list(row) for row in a]
+    v = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    for _ in range(100):
+        off = sum(a[i][j] ** 2 for i in range(n) for j in range(n) if i != j)
+        if off < 1e-30:
+            break
+        for p in range(n - 1):
+            for q in range(p + 1, n):
+                if abs(a[p][q]) < 1e-300:
+                    continue
+                theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q])
+                if abs(theta) > 1e15:                    # (theta squared would overflow)
+                    t = 0.5 / theta
+                else:
+                    t = (1.0 if theta >= 0 else -1.0) / (abs(theta) + math.sqrt(theta * theta + 1.0))
+                c = 1.0 / math.sqrt(t * t + 1.0)
+                s = t * c
+                for k in range(n):                       # a <- a J (columns p, q)
+                    akp, akq = a[k][p], a[k][q]
+                    a[k][p], a[k][q] = c * akp - s * akq, s * akp + c * akq
+                for k in range(n):                       # a <- J^T a (rows p, q)
+                    apk, aqk = a[p][k], a[q][k]
+                    a[p][k], a[q][k] = c * apk - s * aqk, s * apk + c * aqk
+                for k in range(n):
+                    vkp, vkq = v[k][p], v[k][q]
+                    v[k][p], v[k][q] = c * vkp - s * vkq, s * vkp + c * vkq
+    top = max(range(n), key=lambda i: a[i][i])
+    return [v[k][top] for k in range(n)]
+
+
+def superpose(mobile, target, weights=None):
+    """The rotation R (3x3) and translation t that put `mobile` best onto `target` (two lists of coordinates of the
+    same atoms; least squares, optionally weighted per atom): target ~ R . mobile + t. Horn's quaternion method."""
+    n = len(mobile)
+    w = list(weights) if weights is not None else [1.0] * n
+    tw = sum(w)
+    cm = [sum(w[k] * mobile[k][c] for k in range(n)) / tw for c in range(3)]
+    ct = [sum(w[k] * target[k][c] for k in range(n)) / tw for c in range(3)]
+    s = [[0.0] * 3 for _ in range(3)]
+    for k in range(n):
+        a = [mobile[k][c] - cm[c] for c in range(3)]
+        b = [target[k][c] - ct[c] for c in range(3)]
+        for i in range(3):
+            for j in range(3):
+                s[i][j] += w[k] * a[i] * b[j]
+    (xx, xy, xz), (yx, yy, yz), (zx, zy, zz) = s
+    nmat = [[xx + yy + zz, yz - zy, zx - xz, xy - yx],
+            [yz - zy, xx - yy - zz, xy + yx, zx + xz],
+            [zx - xz, xy + yx, -xx + yy - zz, yz + zy],
+            [xy - yx, zx + xz, yz + zy, -xx - yy + zz]]
+    q0, qx, qy, qz = _jacobi_top_eigenvector(nmat)
+    rot = [[q0 * q0 + qx * qx - qy * qy - qz * qz, 2 * (qx * qy - q0 * qz), 2 * (qx * qz + q0 * qy)],
+           [2 * (qy * qx + q0 * qz), q0 * q0 - qx * qx + qy * qy - qz * qz, 2 * (qy * qz - q0 * qx)],
+           [2 * (qz * qx - q0 * qy), 2 * (qz * qy + q0 * qx), q0 * q0 - qx * qx - qy * qy + qz * qz]]
+    t = [ct[i] - sum(rot[i][j] * cm[j] for j in range(3)) for i in range(3)]
+    return rot, t
+
+
+def transform(coords, rot, t):
+    """R . x + t for every point."""
+    return [tuple(sum(rot[i][j] * x[j] for j in range(3)) + t[i] for i in range(3)) for x in coords]
+
+
+def rmsd(a, b):
+    """Root-mean-square distance between two lists of the same points."""
+    return math.sqrt(sum((p[k] - q[k]) ** 2 for p, q in zip(a, b) for k in range(3)) / max(len(a), 1))

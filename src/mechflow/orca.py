@@ -198,6 +198,52 @@ def parse_output(path):
     return r
 
 
+BOHR = 0.529177210903            # Angstrom
+
+
+def read_hess(path):
+    """The frequencies (cm-1), normal modes (one list of 3N numbers per mode: Cartesian displacements, as ORCA
+    prints them) and structure (symbols, coordinates in Angstrom) of an ORCA .hess file; None if it cannot be read."""
+    try:
+        with open(path, errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+
+    def block(tag):
+        for k, ln in enumerate(lines):
+            if ln.strip() == tag:
+                return k
+        raise ValueError("no %s block" % tag)
+    try:
+        k = block("$vibrational_frequencies")
+        n = int(lines[k + 1].split()[0])
+        freqs = [float(lines[k + 2 + m].split()[1]) for m in range(n)]
+        k = block("$normal_modes")
+        rows, cols = (int(x) for x in lines[k + 1].split()[:2])
+        modes = [[0.0] * rows for _ in range(cols)]
+        j, done = k + 2, 0
+        while done < cols:
+            heads = [int(x) for x in lines[j].split()]
+            for r in range(rows):
+                for c, v in zip(heads, lines[j + 1 + r].split()[1:]):
+                    modes[c][r] = float(v)
+            j += rows + 1
+            done = heads[-1] + 1
+        k = block("$atoms")
+        na = int(lines[k + 1].split()[0])
+        symbols, coords = [], []
+        for m in range(na):
+            p = lines[k + 2 + m].split()
+            symbols.append(p[0][:1].upper() + p[0][1:].lower())
+            coords.append(tuple(float(x) * BOHR for x in p[2:5]))
+    except (ValueError, IndexError):
+        return None
+    if len(freqs) != cols or rows != 3 * len(symbols):
+        return None
+    return {"freqs": freqs, "modes": modes, "symbols": symbols, "coords": coords}
+
+
 SLURM_MARKERS = ("DUE TO TIME LIMIT", "CANCELLED", "oom-kill", "OUT_OF_MEMORY", "Out Of Memory", "out-of-memory",
                  "NODE_FAIL", "DUE TO NODE FAILURE")
 

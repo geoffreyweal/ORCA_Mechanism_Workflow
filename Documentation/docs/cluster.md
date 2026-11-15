@@ -95,7 +95,8 @@ otherwise `mechflow sp` runs them when you say so.
 - Only one `mechflow chain` works on a project at a time (a lock folder, `.mechflow_chain.lock`), so two jobs that
   finish together cannot write or submit the same stage twice.
 - A result that needs you stops the chain at that point: a structure flagged CHECK, a SCAN with no maximum, a TS
-  with the wrong number of imaginary frequencies, or a job that failed. `mechflow status` shows these; deal with
+  with the wrong number of imaginary frequencies, or a job that failed. With [`imaginary.auto: true`](project_file.md#imaginary)
+  the chain restarts optimisations with imaginary frequencies pushed along the modes by itself (twice at most). `mechflow status` shows these; deal with
   them (`mechflow accept`, `mechflow reset`, ...), then run `mechflow next` and `mechflow submit` (or
   `mechflow chain`) once, and the chain carries on.
 - What each chain did is at the end of the job's `slurm-<id>.out`.
@@ -135,6 +136,8 @@ Slurm are never touched. Other options:
 | `--redo-done` | also redo jobs that finished (only for jobs you name) |
 | `--downstream` | also reset, from scratch, the later stages that used their results |
 | `--force` | also reset submitted jobs whose state is unknown because `squeue` could not be asked |
+| `--imaginary` | instead of failed jobs: the optimisations that finished with imaginary frequencies they should not have (a species or Step 4B end: any; an OptTS: more than one), restarted from their last geometry pushed along those modes |
+| `--amplitude 0.3` | with `--imaginary`: how far (Å) the atom that moves most is pushed (negative: the other way) |
 
 For example, `mechflow reset S5a --stage OptTS --redo-done --from-scratch --downstream` throws away the TS
 of S5a and everything after it; `mechflow next` then writes the OptTS again from the SCAN maximum (or

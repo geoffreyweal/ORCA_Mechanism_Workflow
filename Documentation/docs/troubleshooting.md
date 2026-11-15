@@ -39,8 +39,13 @@ maximum, `next` already offers OptTS from the points it has.
 ## OptTS, IRC and Step 4B
 
 **More than one imaginary frequency.**
-Start OptTS again from a different SCAN point (`--image`), or from the TS displaced along the second
-imaginary mode.
+`mechflow reset S5 --imaginary` starts the OptTS again from the TS pushed along the extra imaginary mode(s)
+(every one but the largest, which is the reaction's). Or start it from a different SCAN point (`--image`).
+
+**A species (or a Step 4B end) has an imaginary frequency.**
+It stopped at a saddle point, often with a methyl or phenyl group eclipsed. `mechflow reset --imaginary` restarts
+every such optimisation from its last geometry pushed along the imaginary mode(s), read from `orca.hess`; then
+`mechflow submit`. A very small one (a few cm⁻¹) can come back: it is then numerical noise of the integration grid.
 
 **CHECK: "the Forwards end is neither … nor …".**
 The IRC led somewhere else. Look at the end structures (`viewORCA opt` in `Step4B_Validate/Forwards`).
