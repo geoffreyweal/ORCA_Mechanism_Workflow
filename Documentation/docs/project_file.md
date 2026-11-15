@@ -160,6 +160,9 @@ energy (a state's energy is the sum of its molecules').
 - Step 1 jobs of complexes written before the setting was changed are not used or submitted any more; `mechflow
   status` gives the `scancel` line for any still in Slurm.
 - A built complex has no energy of its own, so `steps.csv` gives no barrier from the SCAN start for its steps.
+- The end of a step is treated the same way: an IRC end point of more than one molecule (e.g. X···H–A, or XH⁺···A⁻)
+  gets no Step 4B optimisation. The step is checked from that IRC end point as it is (the scanned pair bonded at one
+  end only, and the two ends are the two sides of the reaction); an end of one molecule is still optimised.
 
 ## resources, slurm and stage_overrides
 

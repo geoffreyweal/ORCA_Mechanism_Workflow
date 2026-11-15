@@ -647,6 +647,8 @@ def cmd_accept(args):
         elif ident in p.steps:
             d = os.path.join(p.step_dir(ident), VALIDATE)
             what = "the Step 4B end points of %s" % ident
+            if not os.path.isdir(d) and os.path.isdir(os.path.join(p.step_dir(ident), "Step4A_IRC")):
+                os.makedirs(d)                  # its IRC ends were not optimised (complexes.optimise: false)
         else:
             _die("'%s' is not a species or step ID" % ident)
         if not os.path.isdir(d):

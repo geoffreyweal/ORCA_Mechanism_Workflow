@@ -12,7 +12,7 @@ again is always safe.
 | Step 1 | ORCA terminated normally; optimisation converged; no imaginary frequency; bonds as in your xyz file | `calcs/Steps/<ID>/Step2Ba_SCAN` for every step that starts from this species (or from a complex built from it and the other molecules, once they are all optimised) |
 | Step 2Ba SCAN | the energy has a maximum inside the SCAN (all SCAN parts combined) | `Step3_Opt_TS` from the highest maximum (`TS_guess_from_SCAN.txt` says which point) |
 | Step 3 OptTS | converged; exactly one imaginary frequency | `Step4A_IRC` from the optimised TS |
-| Step 4A IRC | both IRC end points written | `Step4B_Validate/Forwards` and `Backwards` |
+| Step 4A IRC | both IRC end points written | `Step4B_Validate/Forwards` and `Backwards` (with `complexes.optimise: false`, only for an end of one molecule: an end of several molecules is checked as it is) |
 | Step 4B | both converged with no imaginary frequency; the scanned pair is bonded at one end only; the two ends are the two sides of the step's reaction | the step is DONE (or CHECK) |
 
 The last check compares connectivity. mechflow finds the separate molecules in each end-point structure

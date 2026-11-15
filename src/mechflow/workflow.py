@@ -547,20 +547,41 @@ def step_progress(project, st, queue=None):
     if not (os.path.isfile(os.path.join(t4a, "orca_IRC_F.xyz")) and os.path.isfile(os.path.join(t4a, "orca_IRC_B.xyz"))):
         return "IRC", "failed: no IRC end points written (%s)" % (slurm_problem(t4a) or "see output.out"), None
     fw, bw = os.path.join(sd, VALIDATE, "Forwards"), os.path.join(sd, VALIDATE, "Backwards")
-    sf, sb = job_state(fw, queue), job_state(bw, queue)
+    opt = irc_ends_to_optimise(project, st)
+    sf = job_state(fw, queue) if opt["Forwards"] else "as it is"
+    sb = job_state(bw, queue) if opt["Backwards"] else "as it is"
     if sf == "absent" or sb == "absent":
         r4 = parse_output(os.path.join(t4a, "output.out"))
         note = "IRC converged in both directions" if r4["irc_converged"] >= 2 else \
             "IRC finished (%d of 2 directions converged)" % r4["irc_converged"]
-        if sf != sb:
+        if sf != sb and opt["Forwards"] and opt["Backwards"]:
             note += "; %s to write again" % ("Forwards" if sf == "absent" else "Backwards")
         return "Fwd/Bwd", note, "prepare_4b"
-    if sf != "finished" or sb != "finished":
+    if sf not in ("finished", "as it is") or sb not in ("finished", "as it is"):
         return "Fwd/Bwd", "Forwards %s, Backwards %s" % (sf, sb), None
     ok, msg = validate_4b(project, st, queue)
     if not ok and is_accepted(os.path.join(sd, VALIDATE)):
         return "DONE", "accepted by you: " + msg, None
     return ("DONE" if ok else "CHECK"), msg, None
+
+
+IRC_END = {"Forwards": "orca_IRC_F.xyz", "Backwards": "orca_IRC_B.xyz"}
+
+
+def irc_ends_to_optimise(project, st):
+    """{side: True/False}: which IRC end points Step 4B optimises. With complexes.optimise: false, an end of more than
+    one molecule (e.g. X...H-A or XH+...A-) is not optimised: the step is checked from that IRC end point as it is."""
+    out = {}
+    for side, f in IRC_END.items():
+        if optimise_complexes(project):
+            out[side] = True
+            continue
+        try:
+            mol = chem.read_xyz(os.path.join(project.step_dir(st.id), IRC, f))
+            out[side] = len(chem.fragments(len(mol), chem.bonds(mol, project.tolerance))) <= 1
+        except (OSError, chem.XYZError):
+            out[side] = True
+    return out
 
 
 def _side_fingerprints(project, counter, queue):
@@ -577,7 +598,16 @@ def validate_4b(project, st, queue=None):
     sd = project.step_dir(st.id)
     i, j = st.atoms
     msgs, ok, ends = [], True, {}
+    opt = irc_ends_to_optimise(project, st)
     for side in ("Forwards", "Backwards"):
+        if not opt[side]:                    # several molecules: the IRC end point as it is (complexes.optimise: false)
+            try:
+                ends[side] = chem.read_xyz(os.path.join(sd, IRC, IRC_END[side]))
+                msgs.append("%s: the IRC end point as it is (several molecules, not optimised)" % side)
+            except (OSError, chem.XYZError):
+                ok = False
+                msgs.append("%s IRC end point missing" % side)
+            continue
         d = os.path.join(sd, VALIDATE, side)
         r = parse_output(os.path.join(d, "output.out"))
         if not r["opt_converged"]:
@@ -691,10 +721,11 @@ def prepare(project, st, action, image=None):
         return "IRC from the optimised %s" % st.ts
     if action == "prepare_4b":
         written = []
+        opt = irc_ends_to_optimise(project, st)
         for side, f, short in (("Forwards", "orca_IRC_F.xyz", "Fwd"), ("Backwards", "orca_IRC_B.xyz", "Bwd")):
             folder = os.path.join(sd, VALIDATE, side)
-            if os.path.isfile(os.path.join(folder, "orca.inp")):
-                continue                    # this side is there already (only the other one was reset)
+            if os.path.isfile(os.path.join(folder, "orca.inp")) or not opt[side]:
+                continue                    # there already (only the other one was reset), or not optimised (complexes)
             written.append(side)
             os.makedirs(folder, exist_ok=True)
             shutil.copy(os.path.join(sd, IRC, f), os.path.join(folder, f))
@@ -702,6 +733,8 @@ def prepare(project, st, action, image=None):
                       overrides=st.overrides, info={"item": st.id, "stage": short})
         if len(written) == 2:
             return "Forwards and Backwards optimisations from the IRC end points"
+        if not written:
+            return "no Step 4B optimisation: both IRC end points are of several molecules (checked as they are)"
         return "%s optimisation from its IRC end point" % " ".join(written)
     raise ValueError("unknown action %s" % action)
 

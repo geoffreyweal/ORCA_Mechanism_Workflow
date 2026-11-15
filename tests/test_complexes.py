@@ -294,3 +294,37 @@ def test_calculate_skip_steps(hcn, fake_sbatch, capsys):
     assert "S1      skipped  calculate.skip_steps in project.yaml" in out and "skipped 1" in out
     run(hcn, "next", "--no-squeue", "--step", "S1")          # named: written all the same
     assert os.path.isfile(os.path.join(hcn, "calcs/Steps/S1/Step2Ba_SCAN/orca.inp"))
+
+
+def test_bimolecular_irc_ends_are_not_optimised(hcn, capsys):
+    """complexes.optimise: false: an IRC end of several molecules gets no Step 4B optimisation; the step is checked from
+    the IRC end point as it is. An end of one molecule (S1, HCN -> HNC) is optimised as before."""
+    add_complex(hcn)
+    run(hcn, "next", "--no-squeue")
+    for _ in range(3):                                   # Step 1, SCAN, OptTS: then the IRCs are written
+        fake_orca.finish_ready_jobs(hcn)
+        run(hcn, "next", "--no-squeue")
+    p = Project.load(hcn)
+    irc = os.path.join(p.step_dir("S2"), "Step4A_IRC")
+    assert os.path.isfile(os.path.join(irc, "orca.inp"))
+    c9 = p.species["C9"].mol                             # HCN...OH2: C N H O H H
+    X = [list(c) for c in c9.coords]
+    o, h = X[3], X[2]
+    u = [h[k] - o[k] for k in range(3)]
+    L = math.sqrt(sum(x * x for x in u))
+    fwd = [[x + 2.5 if k == 0 else x for k, x in enumerate(X[0])], [x + 2.5 if k == 0 else x for k, x in enumerate(X[1])],
+           [o[k] + u[k] / L * 0.98 for k in range(3)], X[3], X[4], X[5]]           # CN- ... H3O+
+    chem.write_xyz(os.path.join(irc, "orca_IRC_F.xyz"), chem.Molecule(c9.symbols, [tuple(c) for c in fwd]), "IRC F")
+    chem.write_xyz(os.path.join(irc, "orca_IRC_B.xyz"), c9, "IRC B")
+    write(os.path.join(irc, "output.out"), fake_orca.out_text(-1.0, opt=False, irc=2))
+    fake_orca.finish_ready_jobs(hcn)                     # the IRC of S1
+    capsys.readouterr()
+    run(hcn, "next", "--no-squeue")
+    out = capsys.readouterr().out
+    assert "S1      Forwards and Backwards optimisations from the IRC end points" in out
+    assert "S2" not in out
+    assert not os.path.exists(os.path.join(p.step_dir("S2"), "Step4B_Validate"))
+    stage, detail, _ = step_progress(Project.load(hcn), p.steps["S2"])
+    assert stage == "DONE", detail
+    assert "Forwards: the IRC end point as it is (several molecules, not optimised)" in detail
+    assert "connects R1 + W (Backwards) and P5 + P6 (Forwards)" in detail
