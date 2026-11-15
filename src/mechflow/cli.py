@@ -64,9 +64,21 @@ def _load(args, strict=True):
     return p
 
 
-def _select(p, args):
-    return p.select(mech=getattr(args, "mech", None), steps=getattr(args, "step", None),
-                    species=getattr(args, "species", None), product=getattr(args, "product", None))
+def skipped_steps(p):
+    """the steps of calculate.skip_steps (those that next, submit, sp and reset leave alone unless named)"""
+    want = (p.settings.get("calculate") or {}).get("skip_steps") or []
+    return {sid for sid in p.steps if any(match_any(sid, w) for w in want)}
+
+
+def _select(p, args, calc=False):
+    """the species and steps a command works on; calc=True (next, submit, sp, reset): without --step, not the steps of
+    calculate.skip_steps"""
+    species, steps, mechs = p.select(mech=getattr(args, "mech", None), steps=getattr(args, "step", None),
+                                     species=getattr(args, "species", None), product=getattr(args, "product", None))
+    if calc and not getattr(args, "step", None):
+        skip = skipped_steps(p)
+        steps = [st for st in steps if st.id not in skip]
+    return species, steps, mechs
 
 
 def _rel(p, path):
@@ -216,9 +228,15 @@ def cmd_status(args):
             if args.brief and (r["ok"] or label == "absent"):
                 continue
             print("  %-7s %-10s %s" % (sp.id, label, r["note"] or sp.name))
+    skip = skipped_steps(p)
     if steps:
         print("\nSTEPS (SCAN -> OptTS -> IRC -> Forwards/Backwards)")
         for st in steps:
+            if st.id in skip:
+                counts["steps skipped"] += 1
+                if not args.brief:
+                    print("  %-7s %-8s %s" % (st.id, "skipped", "calculate.skip_steps in project.yaml"))
+                continue
             stage, detail, action = step_progress(p, st, q)
             counts["steps " + stage] += 1
             if args.brief and stage in ("DONE", "waiting"):
@@ -254,7 +272,7 @@ def cmd_status(args):
         ids = sorted(set(i for sp in stale for i in job_ids(p.species_job_dir(sp.id))))
         print("%d of them still have a Step 1 job in Slurm, written before, that is not needed%s" % (
             len(stale), (": scancel " + " ".join(ids)) if ids else ""))
-    failed = resets.plan(p, resets.select_jobs(p, [] if args.steps_only else species, steps), q)[0]
+    failed = resets.plan(p, resets.select_jobs(p, [] if args.steps_only else species, [st for st in steps if st.id not in skip]), q)[0]
     if failed:
         print("%d failed job(s): 'mechflow reset' sets them up to run again, then 'mechflow submit' "
               "('mechflow reset --dry-run' shows what it would do)." % len(failed))
@@ -306,7 +324,7 @@ def cmd_next(args):
             return
         print("%s: %s" % (st.id, prepare(p, st, action)))
         return
-    species, steps, _ = _select(p, args)
+    species, steps, _ = _select(p, args, calc=True)
     if args.refresh:
         n = refresh(p, job_folders(p, species, steps), q)
         print("rewrote %d prepared job(s) from the current settings" % n)
@@ -390,7 +408,7 @@ def _submit_once(folder):
 
 def cmd_submit(args):
     p = _load(args)
-    species, steps, _ = _select(p, args)
+    species, steps, _ = _select(p, args, calc=True)
     q = Queue(enabled=not args.no_squeue)
     # the single points only with single_point.auto; otherwise 'mechflow sp' submits them
     ready = [f for f in job_folders(p, species, steps, with_sp=sp_auto(p)) if job_state(f, q) == "ready"]
@@ -458,7 +476,7 @@ def cmd_reset(args):
             species += [x for x in sps if x not in species]
             steps += [x for x in sts if x not in steps]
     else:
-        species, steps, _ = _select(p, args)
+        species, steps, _ = _select(p, args, calc=True)
     q = Queue(enabled=not args.no_squeue)
     actions, notes = resets.plan(p, resets.select_jobs(p, species, steps, stages), q, redo_done=args.redo_done,
                                  from_scratch=args.from_scratch, downstream_too=args.downstream, force=args.force,
@@ -524,7 +542,7 @@ def cmd_sp(args):
     p = _load(args)
     if not sp_enabled(p):
         _die("single_point.enabled is false in project.yaml, so this project has no single points")
-    species, steps, _ = _select(p, args)
+    species, steps, _ = _select(p, args, calc=True)
     q = Queue(enabled=not args.no_squeue)
     write, ready, waiting = sp_plan(p, species, steps, q, all_ts=args.all_ts)
     lab = lambda kind, item: item.id if kind == "species" else item.ts            # noqa: E731

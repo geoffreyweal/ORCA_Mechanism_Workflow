@@ -71,6 +71,14 @@ single_point:
                           # a mechanism gets one anyway)
 
 # -------------------------------------------------------------------------------------
+# What to calculate. skip_steps: steps that 'mechflow next', 'submit', 'sp' and 'reset' (and so the chain)
+# leave alone unless you name them, e.g. steps that make or use an intermediate that turned out not to
+# exist. 'mechflow status' lists them as skipped; their species are still optimised.
+# -------------------------------------------------------------------------------------
+calculate:
+  skip_steps: []
+
+# -------------------------------------------------------------------------------------
 # Imaginary frequencies where there should be none (a species or a Step 4B end: any; a TS: more than
 # one). 'mechflow reset --imaginary' restarts such an optimisation from its last geometry pushed along
 # the mode(s), read from orca.hess. With auto: true, 'mechflow next' (and so the chain) does that by

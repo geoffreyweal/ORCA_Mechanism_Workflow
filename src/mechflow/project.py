@@ -243,7 +243,7 @@ class Project:
             raise ProjectError("%s must be a mapping of sections (project, orca, species, steps, ...)" % fn)
         self.raw = raw
         known = {"project", "orca", "resources", "slurm", "stage_overrides", "scan", "species", "steps",
-                 "mechanisms", "energies", "single_point", "chain", "complexes", "imaginary"}
+                 "mechanisms", "energies", "single_point", "chain", "complexes", "imaginary", "calculate"}
         for k in raw:
             if k not in known:
                 self.warnings.append("project.yaml: unknown section '%s' (ignored)" % k)

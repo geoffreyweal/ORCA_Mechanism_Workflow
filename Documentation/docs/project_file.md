@@ -104,6 +104,20 @@ stage_overrides:
 The single points use the same `scf_block` and `solvent_block` as the DFT jobs, so the solvent model is the same.
 Their resources are those of the job kind `sp` (`stage_overrides.sp`). Off by default.
 
+## calculate
+
+Steps to leave out of the calculations, for example those that make or use an intermediate that turned out not to
+exist:
+
+```yaml
+calculate:
+  skip_steps: [S10, S1, S12a, S12b]     # IDs (S12 = S12a and S12b) or ranges (S8-S9)
+```
+
+`mechflow next`, `submit`, `sp` and `reset` (and so the [chain](cluster.md#jobs-that-start-the-next-ones-chain))
+leave these steps alone unless you name them (`--step S10`); `mechflow status` lists them as skipped. Their species
+are still optimised, and `collect` still reports the mechanisms that use them (as incomplete).
+
 ## imaginary
 
 What to do about an optimisation that finished with imaginary frequencies it should not have: a species or a Step 4B

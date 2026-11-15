@@ -277,3 +277,20 @@ def test_next_pushes_imaginary_modes_by_itself(hcn, capsys):
     assert "push 3" not in capsys.readouterr().out and job_state(d) == "finished"      # twice is enough: it waits
     run(hcn, "status", "--no-squeue")
     assert "pushed 2 time(s) already; 'mechflow reset R1 --imaginary' pushes it again" in capsys.readouterr().out
+
+
+def test_calculate_skip_steps(hcn, fake_sbatch, capsys):
+    """calculate.skip_steps: next, submit and reset leave those steps alone unless named; status lists them as skipped."""
+    with open(os.path.join(hcn, "project.yaml"), "a") as fh:
+        fh.write("\ncalculate:\n  skip_steps: [S1]\n")
+    run(hcn, "next", "--no-squeue")
+    fake_orca.finish_ready_jobs(hcn)
+    capsys.readouterr()
+    run(hcn, "next", "--no-squeue")
+    assert "S1" not in capsys.readouterr().out
+    assert not os.path.exists(os.path.join(hcn, "calcs/Steps/S1"))
+    run(hcn, "status", "--no-squeue")
+    out = capsys.readouterr().out
+    assert "S1      skipped  calculate.skip_steps in project.yaml" in out and "skipped 1" in out
+    run(hcn, "next", "--no-squeue", "--step", "S1")          # named: written all the same
+    assert os.path.isfile(os.path.join(hcn, "calcs/Steps/S1/Step2Ba_SCAN/orca.inp"))
