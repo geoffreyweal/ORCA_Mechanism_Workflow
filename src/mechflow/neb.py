@@ -2,8 +2,9 @@
 
 With neb.enabled, Step 2 of a step is an NEB-CI between its two ends instead of a SCAN:
 
-    Step2Bb_Ends/Left, Right   optimisation of an end of more than one molecule (an end of one molecule is used as
-                               it is: the optimised structure of that molecule); if its bonds change, the step waits
+    Step2Bb_Ends/Left, Right   optimisation of an end of more than one molecule, or of an end file whose comment line
+                               says 'optimise first' (an end of one molecule is otherwise used as it is: the optimised
+                               structure of that molecule); if its bonds change, the step waits
     Step2Bb_NEB                the NEB-CI between the two ends; its climbing image is the TS guess for the OptTS
 
 The ends are xyz files given in the project (neb.ends, e.g. neb/S5a_left.xyz and neb/S5a_right.xyz): the two sides
@@ -155,6 +156,12 @@ def _molecules(mol, tol):
     return len(chem.fragments(len(mol), chem.bonds(mol, tol)))
 
 
+def wants_optimisation(mol):
+    """An end file whose comment line asks for it ('optimise first') is optimised before the NEB even when it is one
+    molecule: e.g. a conformer set up for the reaction rather than the molecule's own Step 1 structure."""
+    return "optimise first" in (mol.comment or "").lower()
+
+
 def end_folder(project, st, label):
     return os.path.join(project.step_dir(st.id), NEB_ENDS, label)
 
@@ -173,7 +180,7 @@ def end_state(project, st, side, label, queue=None):
     except (OSError, chem.XYZError) as exc:
         out["note"] = "cannot read %s: %s" % (os.path.relpath(out["file"], project.root), exc)
         return out
-    if _molecules(out["mol"], project.tolerance) <= 1:
+    if _molecules(out["mol"], project.tolerance) <= 1 and not wants_optimisation(out["mol"]):
         out.update(ok=True, xyz=out["file"])
         return out
     out["opt"] = True
@@ -236,7 +243,8 @@ def progress(project, st, queue=None):
                 (why + "; ") if why else "", files, st.id), None
         to_opt = [s for s, _ in SIDES if ends[s]["opt"]]
         if any(ends[s]["state"] == "absent" for s in to_opt):
-            return "NEB ends", "%s of more than one molecule: optimised first" % " and ".join(to_opt), "prepare_neb_ends"
+            why = lambda s_: "marked 'optimise first'" if wants_optimisation(ends[s_]["mol"]) else "more than one molecule"  # noqa: E731
+            return "NEB ends", "optimised first: %s" % ", ".join("%s (%s)" % (s_, why(s_)) for s_ in to_opt), "prepare_neb_ends"
         active = [s for s in to_opt if ends[s]["state"] in ("ready", "submitted", "running")]
         if active:
             return "NEB ends", ", ".join("%s %s" % (s, ends[s]["state"]) for s in to_opt), None

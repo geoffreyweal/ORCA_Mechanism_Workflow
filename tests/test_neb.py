@@ -121,7 +121,8 @@ def test_neb_ends_of_two_molecules_are_optimised_first(hcn, capsys):
     run(hcn, "next", "--no-squeue")
     fake_orca.finish_ready_jobs(hcn)                                   # Step 1
     stage, detail, action = progress(hcn, "S2")
-    assert (stage, action) == ("NEB ends", "prepare_neb_ends") and "left and right" in detail
+    assert (stage, action) == ("NEB ends", "prepare_neb_ends") and \
+        detail == "optimised first: left (more than one molecule), right (more than one molecule)"
     run(hcn, "next", "--no-squeue")
     ends = os.path.join(hcn, "calcs/Steps/S2/Step2Bb_Ends")
     assert "!OPT TightOPT" in open(os.path.join(ends, "Left", "orca.inp")).read()
@@ -208,3 +209,21 @@ def test_scan_folders_are_left_alone_on_the_neb_route(hcn, fake_sbatch, capsys):
     run(hcn, "submit", "--no-squeue")
     out = capsys.readouterr().out
     assert "Step2Bb_NEB" in out and "Step2Ba_SCAN" not in out
+
+
+def test_an_end_of_one_molecule_marked_optimise_first_is_optimised(hcn, capsys):
+    """'optimise first' in an end file's comment line: an end of one molecule (a conformer set up for the reaction) is
+    optimised before the NEB too."""
+    settings(hcn, approval=False)
+    hcn_ends(hcn)
+    mol = chem.read_xyz(os.path.join(hcn, "neb", "S1_left.xyz"))
+    chem.write_xyz(os.path.join(hcn, "neb", "S1_left.xyz"), mol, "S1 left end, a conformer set up for it: optimise first")
+    run(hcn, "next", "--no-squeue")
+    fake_orca.finish_ready_jobs(hcn)
+    stage, detail, action = progress(hcn, "S1")
+    assert (stage, action) == ("NEB ends", "prepare_neb_ends") and detail == "optimised first: left (marked 'optimise first')"
+    run(hcn, "next", "--no-squeue")
+    ends = os.path.join(hcn, "calcs/Steps/S1/Step2Bb_Ends")
+    assert os.path.isfile(os.path.join(ends, "Left", "orca.inp")) and not os.path.exists(os.path.join(ends, "Right"))
+    fake_orca.finish_ready_jobs(hcn)
+    assert progress(hcn, "S1")[1] == "ends ready (left optimised, right as given)"

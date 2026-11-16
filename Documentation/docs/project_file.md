@@ -198,7 +198,10 @@ them: they need a chemist's eye (which face a nucleophile comes from, which hydr
 conformer), so make them with a script or by hand, and look at them (and at an interpolated path between them)
 before the NEB runs. `mechflow validate` says for how many steps both end files are there.
 
-- An end of one molecule is used as it is (it must be that molecule's optimised structure).
+- An end of one molecule is used as it is (it must be that molecule's optimised structure), unless its file's comment
+  line says `optimise first`: then it is optimised like an end of several molecules. Use that for a conformer set up
+  for the reaction (e.g. the open form of a ring closure with the nucleophile already pointing at the carbon) rather
+  than the molecule's own Step 1 conformer.
 - An end of more than one molecule (e.g. X···H–A, or a leaving water next to the cation it left) is optimised first
   (`Step2Bb_Ends/Left`, `Right`; job kind `nebend`, `orca.keywords.nebend`). If its bonds change there (a proton
   went back, the water added again), the step stops (CHECK): look at it, then `mechflow accept S5` or place the
