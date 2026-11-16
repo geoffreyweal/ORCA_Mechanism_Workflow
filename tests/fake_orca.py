@@ -77,8 +77,34 @@ def _separate(mol, i, j, gap=2.5):
     return chem.Molecule(mol.symbols, coords)
 
 
-def finish_ready_jobs(root, die_after=None, ts_height=0.03):
-    """Fake every prepared job. die_after=N makes SCANs stop (time limit) after N points."""
+def neb_text(energies, ci, converged=True):
+    """output of an NEB-CI: ORCA's convergence banner and path summary (dE in kcal/mol, the climbing image marked)"""
+    t = "                         Program Version 6.1.0-f.0  -   RELEASE   -\n"
+    if converged:
+        t += ("*********************H U R R A Y*********************\n"
+              "***        THE NEB OPTIMIZATION HAS CONVERGED     ***\n"
+              "*****************************************************\n")
+        t += ("---------------------------------------------------------------\n"
+              "                         PATH SUMMARY\n"
+              "---------------------------------------------------------------\n"
+              "All forces in Eh/Bohr.\n\n"
+              "Image Dist.(Ang.)    E(Eh)              dE(kcal/mol)        max(|Fp|)       RMS(Fp)\n")
+        for k, e in enumerate(energies):
+            t += "  %d     %.3f     %.5f                 %.2f             0.00011        0.00004%s\n" % (
+                k, 0.4 * k, e, (e - energies[0]) * 627.5095, " <= CI" if k == ci else "")
+        t += "\n                             ****ORCA TERMINATED NORMALLY****\n"
+    return t
+
+
+def _frames_text(frames, energies):
+    return "".join("%d\nCoordinates from ORCA-job orca E %.12f\n%s" % (
+        len(m), e, "".join("%-2s %14.8f %14.8f %14.8f\n" % ((sym,) + tuple(c)) for sym, c in zip(m.symbols, m.coords)))
+        for m, e in zip(frames, energies))
+
+
+def finish_ready_jobs(root, die_after=None, ts_height=0.03, neb_converged=True):
+    """Fake every prepared job. die_after=N makes SCANs stop (time limit) after N points; neb_converged=False makes
+    an NEB stop before it converges (it still writes its last path, as ORCA does)."""
     project = Project.load(root)
     n = 0
     for meta_path in sorted(glob.glob(os.path.join(root, "calcs", "**", META), recursive=True)):
@@ -90,9 +116,29 @@ def finish_ready_jobs(root, die_after=None, ts_height=0.03):
         mol = chem.read_xyz(os.path.join(folder, meta["xyz"]))
         q = meta["charge"]
         n += 1
-        if kind == "opt":
+        if kind in ("opt", "nebend"):
             _write_mol(os.path.join(folder, "orca.xyz"), mol, "Coordinates from ORCA-job orca")
             _w(os.path.join(folder, "output.out"), out_text(pseudo_gibbs(mol, q)))
+        elif kind == "neb":
+            right = chem.read_xyz(os.path.join(folder, meta.get("neb_end") or "right_end.xyz"))
+            import re
+            nimg = int(re.search(r"NImages\s+(\d+)", open(os.path.join(folder, "orca.inp")).read()).group(1))
+            frames, energies, e0 = [], [], pseudo_gibbs(mol, q)
+            for k in range(nimg + 2):
+                f = k / (nimg + 1)
+                frames.append(chem.Molecule(mol.symbols, [tuple(a[c] + (b[c] - a[c]) * f for c in range(3))
+                                                          for a, b in zip(mol.coords, right.coords)]))
+                energies.append(e0 + ts_height * math.sin(math.pi * f))
+            ci = max(range(len(energies)), key=lambda k: energies[k])
+            _w(os.path.join(folder, "orca_MEP.allxyz"), _frames_text(frames, energies).replace("\n%d\nCoord" % len(mol),
+                                                                                              "\n>\n%d\nCoord" % len(mol)))
+            if neb_converged:
+                _w(os.path.join(folder, "orca_MEP_trj.xyz"), _frames_text(frames, energies))
+                _write_mol(os.path.join(folder, "orca_NEB-CI_converged.xyz"), frames[ci], "climbing image")
+            _w(os.path.join(folder, "output.out"), neb_text(energies, ci, neb_converged))
+            if not neb_converged:
+                _w(os.path.join(folder, "slurm-124.err"),
+                   "slurmstepd: error: *** JOB 124 ON node CANCELLED AT 2026-01-01 DUE TO TIME LIMIT ***\n")
         elif kind == "scan":
             i, j, d0, d1, npts = meta["scan"]
             limit = npts if die_after is None else min(die_after, npts)
@@ -130,6 +176,13 @@ def finish_ready_jobs(root, die_after=None, ts_height=0.03):
         elif kind == "irc":
             st = project.steps[item]
             sd = project.step_dir(item)
+            if os.path.isfile(os.path.join(sd, "Step2Bb_NEB", "left_end.xyz")):       # Step 2 by NEB: its two ends
+                _write_mol(os.path.join(folder, "orca_IRC_B.xyz"), chem.read_xyz(os.path.join(sd, "Step2Bb_NEB",
+                                                                                              "left_end.xyz")), "IRC backwards end")
+                _write_mol(os.path.join(folder, "orca_IRC_F.xyz"), chem.read_xyz(os.path.join(sd, "Step2Bb_NEB",
+                                                                                              "right_end.xyz")), "IRC forwards end")
+                _w(os.path.join(folder, "output.out"), out_text(-1.0, opt=False, irc=2))
+                continue
             start = chem.read_xyz(os.path.join(sd, "Step2Ba_SCAN", "start_opt.xyz")) if os.path.isfile(
                 os.path.join(sd, "Step2Ba_SCAN", "start_opt.xyz")) else chem.read_xyz(
                 glob.glob(os.path.join(sd, "Step2Ba_SCAN", "SCAN_1", "start_opt.xyz"))[0])

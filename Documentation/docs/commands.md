@@ -8,7 +8,9 @@ Run every command inside a project folder (or any folder below it), or give `-p 
 | `mechflow init` | writes `project.yaml` for the xyz files in `species/`, with every setting and commented examples |
 | `mechflow validate [-v]` | checks the project and writes `overview.md` |
 | `mechflow next` | writes every input that can be written now |
-| `mechflow next S5 --image 57 [--force]` | OptTS of step S5 from SCAN point 57 instead of the automatic choice |
+| `mechflow next S5 --image 57 [--force]` | OptTS of step S5 from SCAN point 57 (or, with `neb.enabled`, image 57 of the NEB path) instead of the automatic choice |
+| `mechflow approve S5 S7 --start` | (`approval.enabled`) you have looked at where Step 2 of S5 and S7 starts: their SCANs or NEBs may run (`S5` = S5a and S5b; `--note TEXT` keeps a note; `--undo` takes it back) |
+| `mechflow approve S5 --guess` | (`approval.enabled`) you have looked at the TS guess of S5 (SCAN maximum or NEB climbing image): its OptTS may run |
 | `mechflow next --refresh` | first rewrites prepared, unsubmitted inputs from the current settings |
 | `mechflow submit` | submits every prepared job (`sbatch`) and records its job id in the job's folder |
 | `mechflow submit --dry-run` | lists the jobs that would be submitted, without submitting them |
@@ -23,7 +25,7 @@ Run every command inside a project folder (or any folder below it), or give `-p 
 | `mechflow check FOLDER` | the procedure's checks on any ORCA job folder |
 | `mechflow scan-profile S5` | the SCAN energy profile of a step, with the TS guess marked |
 | `mechflow restart-scan S5` | restarts a SCAN that stopped (`mechflow reset` does this too) |
-| `mechflow accept ID ...` | accepts a species' Step 1 structure, or a step's Step 4B result, that was flagged CHECK |
+| `mechflow accept ID ...` | accepts a species' Step 1 structure, a step's optimised NEB ends, or a step's Step 4B result, that was flagged CHECK |
 | `mechflow collect` | Step 5: energies, profiles, product ratios and the best routes through the whole network → `results/` |
 | `mechflow map` | network maps → `maps/` |
 | `mechflow atoms I4 [i j]` | the numbered atoms of a species, or the distance between two of them |

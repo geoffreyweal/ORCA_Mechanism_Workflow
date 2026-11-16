@@ -244,7 +244,8 @@ class Project:
             raise ProjectError("%s must be a mapping of sections (project, orca, species, steps, ...)" % fn)
         self.raw = raw
         known = {"project", "orca", "resources", "slurm", "stage_overrides", "scan", "species", "steps",
-                 "mechanisms", "energies", "single_point", "chain", "complexes", "imaginary", "calculate"}
+                 "mechanisms", "energies", "single_point", "chain", "complexes", "imaginary", "calculate", "neb",
+                 "approval"}
         for k in raw:
             if k not in known:
                 self.warnings.append("project.yaml: unknown section '%s' (ignored)" % k)
@@ -280,6 +281,18 @@ class Project:
         for kind in (self.settings.get("stage_overrides") or {}):
             if kind not in JOB_KINDS:
                 self.errors.append("stage_overrides: '%s' is not one of %s" % (kind, ", ".join(JOB_KINDS)))
+        nb = self.settings.get("neb") or {}
+        if nb.get("enabled") and not ("{step}" in str(nb.get("ends") or "") and "{side}" in str(nb.get("ends") or "")):
+            self.errors.append("neb.ends must contain {step} and {side}, e.g. neb/{step}_{side}.xyz")
+        try:
+            if int(nb.get("images", 8)) < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            self.errors.append("neb.images must be a whole number of 1 or more")
+        ap = self.settings.get("approval") or {}
+        for k in ("start", "guess"):
+            if not isinstance(ap.get(k) or [], list):
+                self.errors.append("approval.%s must be a list of step IDs" % k)
 
     def _load_species(self, entries):
         sdir = self.path("species")

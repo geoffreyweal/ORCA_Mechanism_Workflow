@@ -22,6 +22,8 @@ orca:
     scan: "!OPT NormalOPT TightSCF defgrid2 # Try TightOPT if you have convergence problems."   # Step 2Ba
     optts: "!OptTS NumFreq TightOPT TightSCF defgrid2"     # Step 3
     irc: "!IRC TightSCF defgrid2"                           # Step 4A
+    neb: "!NEB-CI TightSCF defgrid2"                        # Step 2Bb (with neb.enabled)
+    nebend: "!OPT TightOPT TightSCF defgrid2"               # Step 2Bb: an NEB end of more than one molecule
   scf_block: |
     %SCF
         MaxIter 2000       # Here setting MaxIter to a very high number. Intended for systems that require sometimes 1000 iterations before converging (very rare).
@@ -32,7 +34,7 @@ orca:
     # Solvent: chloroform (CHCl3), dielectric constant 4.81 and refractive index 1.4459 (20 C).
     # Alternatives: "!CPCM(Chloroform)" on the method line, or SMD:  %CPCM SMD true SMDSOLVENT "CHLOROFORM" END
     %CPCM EPSILON 4.81 REFRAC 1.4459 END
-  blocks:                 # extra input blocks for one kind of job: opt, scan, optts or irc
+  blocks:                 # extra input blocks for one kind of job: opt, scan, optts, irc, neb or nebend
     optts: |
       %GEOM
           Calc_Hess true # Calculate Hessian in the beginning
@@ -100,6 +102,33 @@ imaginary:
 complexes:
   optimise: true          # false: build the complexes from their optimised molecules (saves their Step 1)
 
+# -------------------------------------------------------------------------------------
+# Step 2 by NEB-CI instead of the SCAN (the procedure's Step 2Bb). Each step needs its two ends as xyz
+# files at 'ends' ({step}: the step's ID; {side}: left or right, the two sides of its reaction), with
+# the same atoms in the same order: the optimised structures (Step 1) of the molecules of that side,
+# placed where they react (made e.g. with a script, and looked at first). An end of one molecule is
+# used as it is; an end of more than one molecule is optimised first (Step2Bb_Ends; if its bonds
+# change there, the step waits for you). The NEB-CI then runs between the two ends (Step2Bb_NEB) and
+# its climbing image is the TS guess for the OptTS (Step 3).
+# -------------------------------------------------------------------------------------
+neb:
+  enabled: false
+  ends: "neb/{step}_{side}.xyz"
+  images: 8               # NImages: the images between the two ends (ORCA's default is 8)
+  block: |                # more lines for the %NEB block
+    Interpolation IDPP
+
+# -------------------------------------------------------------------------------------
+# A chemist in the loop (optional). With enabled: true, Step 2 of a step (its SCAN, or its NEB with
+# the end optimisations) waits until you approve where it starts from, and the OptTS waits until you
+# approve the TS guess (the SCAN maximum or the NEB's climbing image): 'mechflow approve <steps>
+# --start' or '--guess' (a file in the step's folder), or list the steps here.
+# -------------------------------------------------------------------------------------
+approval:
+  enabled: false
+  start: []
+  guess: []
+
 resources:
   nprocs: 32              # cores per job (%PAL NPROCS and --ntasks)
   maxcore: 2000           # MB per core (%maxcore)
@@ -160,8 +189,8 @@ ENERGY_DEFAULTS = {
 #: energies.proton_transfers: which proton transfers the network search may make without a barrier
 PROTON_TRANSFER_MODES = ("auto", "path", "steps")
 
-JOB_KINDS = ("opt", "scan", "optts", "irc", "sp")
-DFT_KINDS = ("opt", "scan", "optts", "irc")       # the kinds that use orca.method and orca.keywords
+JOB_KINDS = ("opt", "scan", "optts", "irc", "sp", "neb", "nebend")
+DFT_KINDS = ("opt", "scan", "optts", "irc", "neb", "nebend")   # the kinds that use orca.method and orca.keywords
 
 
 def default_settings():

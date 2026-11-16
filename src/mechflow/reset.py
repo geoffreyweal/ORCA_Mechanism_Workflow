@@ -5,6 +5,8 @@ Nothing is deleted: the files of each attempt move into failed_attempts/<date>/ 
     Step 1, OptTS, Forwards, Backwards   restart from the last geometry of the attempt
     SCAN                                 a new part (SCAN_2, SCAN_3 ...) from the last converged point, as in the
                                          procedure (a SCAN with no converged point runs again as it was)
+    Ends (NEB ends)                      restart from the last geometry of the attempt
+    NEB                                  runs again from its last path (orca_MEP.allxyz), if it wrote one
     IRC, single points (SP)              run again from the same structure
     --from-scratch                       the stage starts again from the beginning: 'mechflow next' writes it again
                                          from the previous stage's result
@@ -21,17 +23,19 @@ import os
 import shutil
 from collections import namedtuple
 
-from . import chem
+from . import chem, neb
 from .orca import META, job_ids, job_state, parse_output, read_hess, read_meta, slurm_problem, write_job
 from .workflow import (ACCEPTED, ATTEMPTS, IRC, OPTTS, SCAN, VALIDATE, assembled, complex_parts, restart_scan,
                        scan_folders, species_sp_dir, step_progress, step_sp_dir)
 
 RESTART_XYZ = "last_geometry_restart.xyz"     # the input of an optimisation restarted from its last geometry
 AMPLITUDE = 0.3          # Angstrom: --imaginary moves the atom that moves most in the imaginary mode(s) this far
-STAGES = ("Step1", "SP", "SCAN", "OptTS", "IRC", "Fwd", "Bwd")
+STAGES = ("Step1", "SP", "SCAN", "Ends", "NEB", "OptTS", "IRC", "Fwd", "Bwd")
 STAGE_NAMES = {"step1": ("Step1",), "sp": ("SP",), "scan": ("SCAN",), "optts": ("OptTS",), "irc": ("IRC",),
-               "fwd": ("Fwd",), "forwards": ("Fwd",), "bwd": ("Bwd",), "backwards": ("Bwd",), "4b": ("Fwd", "Bwd")}
-LATER = {"SCAN": ("OptTS", "IRC", "Fwd", "Bwd", "SP"), "OptTS": ("IRC", "Fwd", "Bwd", "SP"), "IRC": ("Fwd", "Bwd")}
+               "fwd": ("Fwd",), "forwards": ("Fwd",), "bwd": ("Bwd",), "backwards": ("Bwd",), "4b": ("Fwd", "Bwd"),
+               "ends": ("Ends",), "neb": ("NEB",)}
+LATER = {"SCAN": ("OptTS", "IRC", "Fwd", "Bwd", "SP"), "Ends": ("NEB", "OptTS", "IRC", "Fwd", "Bwd", "SP"),
+         "NEB": ("OptTS", "IRC", "Fwd", "Bwd", "SP"), "OptTS": ("IRC", "Fwd", "Bwd", "SP"), "IRC": ("Fwd", "Bwd")}
 
 Job = namedtuple("Job", "item kind stage folder")      # kind: species or step
 
@@ -56,7 +60,10 @@ def species_jobs(project, sp):
 
 def step_jobs(project, st):
     sd = project.step_dir(st.id)
-    return [Job(st.id, "step", "SCAN", os.path.join(sd, SCAN)),
+    step2 = ([Job(st.id, "step", "Ends", neb.end_folder(project, st, label)) for _, label in neb.SIDES] +
+             [Job(st.id, "step", "NEB", os.path.join(sd, neb.NEB))]) if neb.enabled(project) else \
+        [Job(st.id, "step", "SCAN", os.path.join(sd, SCAN))]      # (the other route's folders are left alone)
+    return step2 + [
             Job(st.id, "step", "OptTS", os.path.join(sd, OPTTS)),
             Job(st.id, "step", "IRC", os.path.join(sd, IRC)),
             Job(st.id, "step", "Fwd", os.path.join(sd, VALIDATE, "Forwards")),
@@ -160,7 +167,7 @@ def why_failed(folder):
 
 def _last_geometry(folder, meta):
     """orca.xyz of an optimisation that got somewhere (the same atoms as its input), else None."""
-    if meta.get("kind") not in ("opt", "optts"):
+    if meta.get("kind") not in ("opt", "optts", "nebend"):
         return None
     last = os.path.join(folder, "orca.xyz")
     try:
@@ -288,6 +295,9 @@ def describe(job, how, amplitude=AMPLITUDE):
     if job.stage == "SCAN":
         return ("a new SCAN part from its last converged point" if _scan_points_in(run_folder(job))
                 else "runs again as it was (no converged SCAN point)")
+    if job.stage == "NEB":
+        return ("runs on from its last path (%s)" % neb.ALLXYZ if os.path.isfile(os.path.join(job.folder, neb.ALLXYZ))
+                else "runs again from its two ends")
     meta = read_meta(job.folder) or {}
     if _last_geometry(job.folder, meta):
         return "restarts from the last geometry of that attempt"
@@ -376,6 +386,8 @@ def _restart(project, job, folder, stamp, amplitude=None):
 
 def apply(project, job, how, stamp, amplitude=AMPLITUDE):
     """Reset one job. Returns (folder holding the attempt's files or None, what was done)."""
+    if job.kind == "step" and job.stage in ("SCAN", "Ends", "NEB") and job.item in project.steps:
+        neb.unapprove(project, project.steps[job.item], "guess")      # its TS guess will be a new one
     if how == "displace":
         return _restart(project, job, job.folder, stamp, amplitude=amplitude)
     if how == "scratch":
@@ -387,4 +399,23 @@ def apply(project, job, how, stamp, amplitude=AMPLITUDE):
         if _scan_points_in(last):
             return None, restart_scan(project, project.steps[job.item])
         return _restart(project, job, last, stamp)
+    if job.stage == "NEB":
+        return _restart_neb(project, job, stamp)
     return _restart(project, job, job.folder, stamp)
+
+
+def _restart_neb(project, job, stamp):
+    """An NEB runs again: from its last path (orca_MEP.allxyz) if it wrote one, else from its two ends."""
+    meta = read_meta(job.folder)
+    if not meta:
+        raise ValueError("no %s in %s, so it cannot be restarted: use --from-scratch" % (META, job.folder))
+    path = neb.restart_from_path(job.folder)
+    keep = {"orca.inp", "submit.sl", META, neb.LEFT_END, neb.RIGHT_END, "NEB_ends.txt", neb.RESTART_ALLXYZ}
+    dest = archive(job.folder, stamp, keep=keep, copy=("orca.inp", "submit.sl"))
+    info = {k: v for k, v in meta.items() if k not in ("kind", "xyz", "charge", "mult", "jobname", "scan", "overrides")}
+    info["restarts"] = info.get("restarts", 0) + 1
+    info["restart_allxyz"] = path
+    st = project.steps[job.item]
+    write_job(job.folder, project.settings, "neb", meta["xyz"], meta["charge"], meta["mult"], meta["jobname"],
+              overrides=st.overrides, info=info)
+    return dest, ("runs on from its last path (%s)" % neb.ALLXYZ) if path else "runs again from its two ends"

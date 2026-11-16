@@ -21,7 +21,7 @@ import sys
 import time
 from collections import Counter
 
-from . import __version__, chem, network
+from . import __version__, chem, neb, network
 from . import reset as resets
 from .defaults import PROTON_TRANSFER_MODES, SETTINGS_YAML
 from .energies import Energies, collect
@@ -176,6 +176,17 @@ def cmd_validate(args):
         print("note:    %d complex(es) are built from their optimised molecules (complexes.optimise: false): %s" % (
             len(built), ", ".join("%s = %s" % (sp.id, " + ".join(pid for pid, _ in complex_parts(p, sp)))
                                   for sp in built if _parts_ok(p, sp))))
+    if neb.enabled(p):
+        have = [s for s, st in p.steps.items() if all(os.path.isfile(neb.end_file(p, st, side)) for side, _ in neb.SIDES)]
+        print("note:    Step 2 by NEB-CI (neb.enabled, %d images): both end files for %d of %d step(s)%s" % (
+            neb.images(p), len(have), len(p.steps), "" if len(have) == len(p.steps) else
+            "; none yet for " + ", ".join(s for s in p.steps if s not in have)))
+    if neb.approval_on(p):
+        print("note:    a chemist in the loop (approval.enabled): Step 2 and the OptTS of a step wait for 'mechflow approve'")
+        for what in neb.APPROVALS:
+            bad = [str(x) for x in ((p.settings.get("approval") or {}).get(what) or []) if str(x) not in p.steps]
+            if bad:
+                print("WARNING: approval.%s: unknown step(s) %s" % (what, ", ".join(bad)))
     unused_sp = [s for s, sp in p.species.items() if not sp.used_by]
     unused_st = [s for s, st in p.steps.items() if not st.used_by]
     if unused_sp:
@@ -230,7 +241,7 @@ def cmd_status(args):
             print("  %-7s %-10s %s" % (sp.id, label, r["note"] or sp.name))
     skip = skipped_steps(p)
     if steps:
-        print("\nSTEPS (SCAN -> OptTS -> IRC -> Forwards/Backwards)")
+        print("\nSTEPS (%s -> OptTS -> IRC -> Forwards/Backwards)" % ("NEB ends -> NEB" if neb.enabled(p) else "SCAN"))
         for st in steps:
             if st.id in skip:
                 counts["steps skipped"] += 1
@@ -263,6 +274,9 @@ def cmd_status(args):
     print("\nSpecies: %s\nSteps:   %s" % (sp_c or "-", st_c or "-"))
     if counts.get("species absent"):
         print("(%d species have no Step 1 input yet: run 'mechflow next')" % counts["species absent"])
+    if counts.get("steps approve"):
+        print("%d step(s) wait for you: look at them, then 'mechflow approve <steps> --start' (where Step 2 starts) "
+              "or '--guess' (the TS guess); then 'mechflow next' and 'mechflow submit'" % counts["steps approve"])
     built = [sp for sp in species if assembled(p, sp)]
     if built:
         print("(%d complex(es) are built from their optimised molecules when their SCANs start: complexes.optimise is false)"
@@ -644,6 +658,10 @@ def cmd_accept(args):
         if ident in p.species:
             d = p.species_job_dir(ident)
             what = "the Step 1 structure of %s (bond changes accepted)" % ident
+        elif ident in p.steps and os.path.isdir(os.path.join(p.step_dir(ident), neb.NEB_ENDS)) and \
+                not os.path.isfile(os.path.join(p.step_dir(ident), neb.NEB, "orca.inp")):
+            d = os.path.join(p.step_dir(ident), neb.NEB_ENDS)
+            what = "the optimised NEB ends of %s (bond changes accepted)" % ident
         elif ident in p.steps:
             d = os.path.join(p.step_dir(ident), VALIDATE)
             what = "the Step 4B end points of %s" % ident
@@ -656,6 +674,39 @@ def cmd_accept(args):
         with open(os.path.join(d, ACCEPTED), "w") as fh:
             fh.write("accepted with 'mechflow accept'\n")
         print("accepted %s" % what)
+
+
+def cmd_approve(args):
+    p = _load(args, strict=False)
+    what = "guess" if args.guess else "start"
+    steps = []
+    for ident in args.ids:
+        pair = [st for sid, st in p.steps.items() if len(sid) == len(ident) + 1 and sid.startswith(ident)
+                and sid[-1].isalpha()] if ident not in p.steps else []
+        if pair:                                   # S5 = S5a and S5b
+            steps += pair
+            continue
+        try:
+            steps.append(p.resolve_step(ident))
+        except ProjectError as exc:
+            _die(str(exc))
+    if not neb.approval_on(p) and not args.undo:
+        print("note: approval.enabled is false in project.yaml, so nothing waits for an approval (it is recorded anyway)")
+    q = Queue(enabled=not args.no_squeue)
+    for st in steps:
+        if args.undo:
+            print("%-7s %s" % (st.id, "approval of the %s taken back" % what if neb.unapprove(p, st, what)
+                                else "had no approval of the %s to take back" % what))
+            continue
+        stage, detail, _ = step_progress(p, st, q)
+        if what == "guess" and not (stage == "approve" and "--guess" in detail):
+            print("%-7s approved the TS guess in advance (now: %s - %s)" % (st.id, stage, detail))
+        elif what == "start" and not (stage == "approve" and "--start" in detail):
+            print("%-7s approved the start in advance (now: %s - %s)" % (st.id, stage, detail))
+        else:
+            print("%-7s approved the %s" % (st.id, "TS guess" if what == "guess" else "start"))
+        neb.approve(p, st, what, args.note or "")
+    print("\nNext: mechflow next, then mechflow submit")
 
 
 def cmd_collect(args):
@@ -854,6 +905,17 @@ def build_parser():
     q = sub.add_parser("accept", help="accept a Step 1 structure or Step 4B result that was flagged CHECK")
     q.add_argument("ids", nargs="+", help="species or step IDs")
     q.set_defaults(func=cmd_accept)
+
+    q = sub.add_parser("approve", help="approve where a step's Step 2 starts (--start) or its TS guess (--guess), "
+                                       "for approval.enabled")
+    q.add_argument("ids", nargs="+", help="step IDs (S5 includes S5a and S5b)")
+    g = q.add_mutually_exclusive_group(required=True)
+    g.add_argument("--start", action="store_true", help="the start of Step 2: the SCAN start, or the two NEB ends")
+    g.add_argument("--guess", action="store_true", help="the TS guess: the SCAN maximum, or the NEB's climbing image")
+    q.add_argument("--undo", action="store_true", help="take the approval back")
+    q.add_argument("--note", help="a note kept with the approval")
+    squeue_flag(q)
+    q.set_defaults(func=cmd_approve)
 
     q = sub.add_parser("collect", help="Step 5: energies, profiles and product ratios -> results/")
     filters(q)

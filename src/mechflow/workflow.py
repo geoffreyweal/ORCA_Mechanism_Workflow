@@ -15,7 +15,7 @@ import os
 import re
 import shutil
 
-from . import chem, placement
+from . import chem, neb, placement
 from .orca import (job_state, parse_output, read_meta, read_text, rewrite_job, slurm_problem, write_job)
 
 HARTREE_KJ = 2625.4996
@@ -517,16 +517,36 @@ def scan_profile_text(pts, mark=None, width=46):
 # ============================================================================== steps
 
 def step_progress(project, st, queue=None):
-    """(stage, detail, action) for a step. action is what 'next' would prepare, or None."""
+    """(stage, detail, action) for a step. action is what 'next' would prepare, or None.
+    Stage 'approve': the step waits for you (approval.enabled): its start, or its TS guess."""
+    sd = project.step_dir(st.id)
+    t3 = os.path.join(sd, OPTTS)
+    s3 = job_state(t3, queue)
+    if s3 == "absent":
+        stage, detail, action = (neb.progress(project, st, queue) if neb.enabled(project)
+                                 else _scan_progress(project, st, queue))
+        if action == "prepare_optts":
+            ok, why = neb.approval_state(project, st, "guess")
+            if not ok:
+                return "approve", "%s: look at it, then 'mechflow approve %s --guess'" % (detail, st.id), None
+        return stage, detail, action
+    return _after_step2(project, st, sd, t3, s3, queue)
+
+
+def _scan_progress(project, st, queue=None):
+    """(stage, detail, action) of a step's Step 2 by SCAN, up to the TS guess ('prepare_optts' once it is there)."""
     sd = project.step_dir(st.id)
     scan_dirs = scan_folders(sd)
     s2 = job_state(scan_dirs[-1], queue)
     if s2 == "absent":
         sres = start_structure(project, st.start, queue)
-        if sres["built"] is not None:
-            return "SCAN", "start structure %s built from its optimised molecules" % st.start, "prepare_scan"
         if sres["ok"]:
-            return "SCAN", "start structure %s optimised" % st.start, "prepare_scan"
+            how = "built from its optimised molecules" if sres["built"] is not None else "optimised"
+            ok, why = neb.approval_state(project, st, "start")
+            if not ok:
+                return "approve", "%sstart structure %s %s: look at it, then 'mechflow approve %s --start'" % (
+                    (why + "; ") if why else "", st.start, how, st.id), None
+            return "SCAN", "start structure %s %s" % (st.start, how), "prepare_scan"
         if assembled(project, project.species[st.start]):
             return "waiting", "for %s: %s" % (st.start, sres["note"]), None
         return "waiting", "for Step 1 of %s (%s)" % (st.start, sres["note"]), None
@@ -534,22 +554,23 @@ def step_progress(project, st, queue=None):
         return "SCAN", s2, None
     i, j = st.atoms
     pts = scan_points(sd, i, j)
-    t3 = os.path.join(sd, OPTTS)
-    s3 = job_state(t3, queue)
-    if s3 == "absent":
-        if s2 == "failed" and not pts:
-            return "SCAN", "failed (%s)" % (slurm_problem(scan_dirs[-1]) or "see output.out"), None
-        k = scan_maximum(pts)
-        if k is None:
-            note = "no energy maximum in %d SCAN point(s)" % len(pts)
-            note += ("; the SCAN stopped early: 'mechflow reset %s' runs it on from its last point" % st.id) \
-                if s2 == "failed" else \
-                " - barrierless here, or scan further / another distance"
-            return "SCAN", note, None
-        note = "maximum at image %d (d = %.3f A)" % (pts[k]["image"], pts[k]["d"])
-        if s2 == "failed":
-            note += " [the SCAN stopped early but passed a maximum]"
-        return "OptTS", note, "prepare_optts"
+    if s2 == "failed" and not pts:
+        return "SCAN", "failed (%s)" % (slurm_problem(scan_dirs[-1]) or "see output.out"), None
+    k = scan_maximum(pts)
+    if k is None:
+        note = "no energy maximum in %d SCAN point(s)" % len(pts)
+        note += ("; the SCAN stopped early: 'mechflow reset %s' runs it on from its last point" % st.id) \
+            if s2 == "failed" else \
+            " - barrierless here, or scan further / another distance"
+        return "SCAN", note, None
+    note = "maximum at image %d (d = %.3f A)" % (pts[k]["image"], pts[k]["d"])
+    if s2 == "failed":
+        note += " [the SCAN stopped early but passed a maximum]"
+    return "OptTS", note, "prepare_optts"
+
+
+def _after_step2(project, st, sd, t3, s3, queue=None):
+    """(stage, detail, action) from the OptTS on (Step 3, Step 4A, Step 4B)."""
     if s3 in ("ready", "submitted", "running"):
         return "OptTS", s3, None
     r3 = parse_output(os.path.join(t3, "output.out"))
@@ -687,6 +708,8 @@ def project_expression(counter):
 
 def prepare(project, st, action, image=None):
     """Write the input of the next stage of a step. Returns a one-line message."""
+    if action in ("prepare_neb_ends", "prepare_neb") or (action == "prepare_optts" and neb.enabled(project)):
+        return neb.prepare(project, st, action, image)
     sd = project.step_dir(st.id)
     i, j = st.atoms
     if action == "prepare_scan":
@@ -781,6 +804,12 @@ def _write_step_info(project, st):
                  "stretched" if st.mode == "stretch" else "brought together", st.to, st.scan_step),
              "Charge %d, multiplicity %d" % (st.charge, st.mult), "",
              "Run 'mechflow next' after each stage: it checks the stage and writes the next input."]
+    if neb.enabled(project):
+        lines[5:7] = ["Step 2 by NEB-CI (neb.enabled): from %s to %s (%d images between them); an end of more than "
+                      "one molecule is optimised first (%s)" % (
+                          os.path.relpath(neb.end_file(project, st, "left"), project.root),
+                          os.path.relpath(neb.end_file(project, st, "right"), project.root), neb.images(project),
+                          neb.NEB_ENDS)]
     with open(os.path.join(sd, "step_info.txt"), "w") as fh:
         fh.write("\n".join(lines) + "\n")
 
@@ -843,8 +872,13 @@ def job_folders(project, species, steps, with_sp=True):
             yield species_sp_dir(project, sp.id)
     for st in steps:
         sd = project.step_dir(st.id)
-        for f in scan_folders(sd):
-            yield f
+        if neb.enabled(project):                 # Step 2 by NEB: SCAN folders written before are left alone
+            for _, label in neb.SIDES:
+                yield neb.end_folder(project, st, label)
+            yield os.path.join(sd, neb.NEB)
+        else:
+            for f in scan_folders(sd):
+                yield f
         yield os.path.join(sd, OPTTS)
         yield os.path.join(sd, IRC)
         yield os.path.join(sd, VALIDATE, "Forwards")

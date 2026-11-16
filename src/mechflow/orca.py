@@ -44,12 +44,13 @@ def _block(text):
     return (text or "").strip("\n")
 
 
-def render_input(settings, kind, xyzfile, charge, mult, scan=None, overrides=None):
-    """Text of orca.inp for a job of kind 'opt' | 'scan' | 'optts' | 'irc' | 'sp'.
+def render_input(settings, kind, xyzfile, charge, mult, scan=None, overrides=None, neb_end=None, restart_allxyz=None):
+    """Text of orca.inp for a job of kind 'opt' | 'scan' | 'optts' | 'irc' | 'sp' | 'neb' | 'nebend'.
 
     'sp' is the Step 5 single point: the method and keywords of settings['single_point'] instead of orca.method
     and orca.keywords, with the same SCF and solvent blocks.
-    scan = (i, j, first, last, npoints) with 0-based atom numbers, as ORCA expects."""
+    scan = (i, j, first, last, npoints) with 0-based atom numbers, as ORCA expects.
+    neb_end: for an NEB, the xyz file of its other end (NEB_END_XYZFILE); restart_allxyz: a path to start from."""
     o = settings["orca"]
     res, _ = job_settings(settings, kind, overrides)
     if kind == "sp":
@@ -69,6 +70,17 @@ def render_input(settings, kind, xyzfile, charge, mult, scan=None, overrides=Non
         if o.get("scan_maxiter"):
             out.append("    MaxIter %s   # optimisation cycles allowed per SCAN point" % o["scan_maxiter"])
         out.append("    SCAN B %d %d = %.3f, %.3f, %d END" % (i, j, d0, d1, n))
+        out.append("END")
+    if kind == "neb":
+        nb = settings.get("neb") or {}
+        out.append("%NEB")
+        out.append('    NEB_END_XYZFILE "%s"' % (neb_end or "right_end.xyz"))
+        out.append("    NImages %d   # images between the two ends" % int(nb.get("images") or 8))
+        if restart_allxyz:
+            out.append('    Restart_ALLXYZFile "%s"   # the path of the last attempt' % restart_allxyz)
+        for ln in _block(nb.get("block")).splitlines():
+            if ln.strip():
+                out.append("    " + ln.strip())
         out.append("END")
     extra = (settings.get("single_point") or {}).get("block") if kind == "sp" else (o.get("blocks") or {}).get(kind)
     if _block(extra):
@@ -126,7 +138,8 @@ def write_job(folder, settings, kind, xyzfile, charge, mult, jobname, scan=None,
     """Write orca.inp + submit.sl (+ the job parameters in .mechflow.json)."""
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, "orca.inp"), "w") as fh:
-        fh.write(render_input(settings, kind, xyzfile, charge, mult, scan, overrides))
+        fh.write(render_input(settings, kind, xyzfile, charge, mult, scan, overrides,
+                              neb_end=(info or {}).get("neb_end"), restart_allxyz=(info or {}).get("restart_allxyz")))
     with open(os.path.join(folder, "submit.sl"), "w") as fh:
         fh.write(render_submit(settings, kind, jobname, overrides))
     meta = {"kind": kind, "xyz": xyzfile, "charge": charge, "mult": mult, "jobname": jobname,

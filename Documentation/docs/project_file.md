@@ -180,6 +180,51 @@ file. (The SCAN points themselves cannot overlap: each is optimised with only th
   gets no Step 4B optimisation. The step is checked from that IRC end point as it is (the scanned pair bonded at one
   end only, and the two ends are the two sides of the reaction); an end of one molecule is still optimised.
 
+## neb
+
+```yaml
+neb:
+  enabled: true
+  ends: "neb/{step}_{side}.xyz"   # the two ends of each step: neb/S5a_left.xyz and neb/S5a_right.xyz
+  images: 8                       # NImages: the images between the two ends (ORCA's default 8)
+  block: |                        # more lines for the %NEB block
+    Interpolation IDPP
+```
+
+Step 2 of every step is then an NEB-CI (the procedure's Step 2Bb) instead of the SCAN. Each step needs its two ends
+as xyz files: the left and the right side of its reaction, with the **same atoms in the same order**, each made of
+the optimised (Step 1) structures of the molecules of that side, placed where they react. mechflow does not make
+them: they need a chemist's eye (which face a nucleophile comes from, which hydrogen bond a proton moves along, which
+conformer), so make them with a script or by hand, and look at them (and at an interpolated path between them)
+before the NEB runs. `mechflow validate` says for how many steps both end files are there.
+
+- An end of one molecule is used as it is (it must be that molecule's optimised structure).
+- An end of more than one molecule (e.g. X···H–A, or a leaving water next to the cation it left) is optimised first
+  (`Step2Bb_Ends/Left`, `Right`; job kind `nebend`, `orca.keywords.nebend`). If its bonds change there (a proton
+  went back, the water added again), the step stops (CHECK): look at it, then `mechflow accept S5` or place the
+  molecules differently.
+- The NEB-CI (`Step2Bb_NEB`, job kind `neb`, `orca.keywords.neb`: `!NEB-CI` by default) runs from the left end to the
+  right end (`NEB_END_XYZFILE`), and its climbing image is the TS guess for the OptTS. `mechflow next S5 --image 12
+  --force` takes another image of the path instead.
+- A step's `scan:` settings are still used for its checks (the pair bonded at one end only in Step 4B).
+
+## approval
+
+```yaml
+approval:
+  enabled: true
+  start: []      # steps whose Step 2 start you have approved (or 'mechflow approve S5 --start')
+  guess: []      # steps whose TS guess you have approved (or 'mechflow approve S5 --guess')
+```
+
+A chemist in the loop: with `enabled: true`, Step 2 of a step (its SCAN, or its NEB with the end optimisations) waits
+until you approve where it starts from, and its OptTS waits until you approve the TS guess (the SCAN maximum, or the
+NEB's climbing image). Steps 1, 3 and 4 go on by themselves. `mechflow status` shows the steps that wait as `approve`.
+`mechflow approve S5 --start` (or `--guess`) writes `approved_start.txt` (or `approved_guess.txt`) in the step's
+folder, with who and when (`--note` adds a note, `--undo` takes it back); steps listed here count as approved too.
+An approved NEB start holds only while the step's end files stay as they were; a reset of the SCAN, the NEB or its
+ends takes back the approval of the TS guess.
+
 ## resources, slurm and stage_overrides
 
 ```yaml
