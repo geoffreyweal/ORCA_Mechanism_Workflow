@@ -106,6 +106,9 @@ otherwise `mechflow sp` runs them when you say so.
 - The cluster must let jobs submit jobs (`sbatch` on a compute node), as most do.
 - Jobs written before `chain` was switched on do not chain: `mechflow next --refresh` rewrites the ones that have
   not been submitted.
+- To stop the chain, set `enabled: false`. Jobs already in the queue still run `mechflow chain` when they finish, but
+  it then starts nothing; from then on you run `mechflow next` and `mechflow submit` yourself, stage by stage
+  (`mechflow next --refresh` takes the chain lines out of the scripts of jobs not yet submitted).
 
 ## When jobs fail
 

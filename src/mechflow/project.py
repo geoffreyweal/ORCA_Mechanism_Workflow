@@ -393,6 +393,12 @@ class Project:
             if e.get("ts"):
                 st.ts = str(e["ts"])
             st.overrides = {k: v for k, v in (e.get("resources") or {}).items()}
+            if e.get("neb_images") is not None:          # this step's NImages (else neb.images)
+                n_ = e["neb_images"]
+                if isinstance(n_, bool) or not isinstance(n_, int) or n_ < 1:
+                    self.errors.append("step %s: neb_images must be a whole number of 1 or more" % sid)
+                else:
+                    st.overrides["neb_images"] = n_
             try:
                 st.left, st.right = split_reaction(e.get("reaction", ""))
             except ProjectError as exc:

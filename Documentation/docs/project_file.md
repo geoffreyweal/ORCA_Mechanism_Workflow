@@ -187,6 +187,7 @@ neb:
   enabled: true
   ends: "neb/{step}_{side}.xyz"   # the two ends of each step: neb/S5a_left.xyz and neb/S5a_right.xyz
   images: 8                       # NImages: the images between the two ends (ORCA's default 8)
+  ts: "neb/{step}_ts.xyz"         # optional: a TS guess for a step (only where the file is there)
   block: |                        # more lines for the %NEB block
     Interpolation IDPP
 ```
@@ -210,6 +211,14 @@ before the NEB runs. `mechflow validate` says for how many steps both end files 
   right end (`NEB_END_XYZFILE`), and its climbing image is the TS guess for the OptTS. `mechflow next S5 --image 12
   --force` takes another image of the path instead.
 - A step's `scan:` settings are still used for its checks (the pair bonded at one end only in Step 4B).
+- A step whose TS guess file (`neb.ts`) is there starts its NEB through it (`NEB_TS_XYZFILE`): ORCA interpolates
+  from the left end to the TS guess and on to the right end, then optimises every image, the TS guess too, so it
+  does not have to be accurate. It must have the ends' atoms in the same order (otherwise the step stops at CHECK).
+  An approved start also covers this file. A restart from the last path (`mechflow reset S5 --stage NEB`) does not
+  use it.
+- A step can have its own number of images: `neb_images: 100` in its entry in `steps:` (e.g. a long path, or one
+  where two protons move). An NEB already written keeps its count: `mechflow reset S5 --stage NEB --from-scratch`,
+  then `mechflow next`, writes it again.
 
 ## approval
 

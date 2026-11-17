@@ -33,6 +33,7 @@ CI_FILE = "orca_NEB-CI_converged.xyz"
 MEP_FILE = "orca_MEP_trj.xyz"
 ALLXYZ = "orca_MEP.allxyz"
 RESTART_ALLXYZ = "restart_path.allxyz"
+TS_GUESS = "ts_guess.xyz"
 APPROVALS = ("start", "guess")
 ACCEPTED = ".accepted"
 KCAL_KJ = 4.184
@@ -43,13 +44,26 @@ def enabled(project):
     return bool((project.settings.get("neb") or {}).get("enabled"))
 
 
-def images(project):
-    return int((project.settings.get("neb") or {}).get("images") or 8)
+def images(project, st=None):
+    """NImages: the step's own neb_images, else neb.images (ORCA's default 8)."""
+    own = (st.overrides or {}).get("neb_images") if st is not None else None
+    return int(own or (project.settings.get("neb") or {}).get("images") or 8)
 
 
 def end_file(project, st, side):
     pattern = str((project.settings.get("neb") or {}).get("ends") or "neb/{step}_{side}.xyz")
     return project.path(pattern.format(step=st.id, side=side))
+
+
+def ts_file(project, st):
+    """The step's TS guess for its NEB (neb.ts, e.g. "neb/{step}_ts.xyz": the same atoms in the same order as the two
+    ends): ORCA interpolates the starting path from the left end to it and on to the right end. None without the
+    setting or the file."""
+    pattern = (project.settings.get("neb") or {}).get("ts")
+    if not pattern:
+        return None
+    f = project.path(str(pattern).format(step=st.id))
+    return f if os.path.isfile(f) else None
 
 
 def approval_on(project):
@@ -70,6 +84,10 @@ def ends_digest(project, st):
                 h.update(fh.read())
         except OSError:
             h.update(b"(missing)")
+    ts = ts_file(project, st)
+    if ts:                                    # (steps without a TS guess keep the checksum they had before neb.ts)
+        with open(ts, "rb") as fh:
+            h.update(b"(ts)" + fh.read())
     return h.hexdigest()
 
 
@@ -211,6 +229,10 @@ def _check_ends(project, st, ends, queue):
     if left.symbols != right.symbols:
         return "CHECK", "the two NEB ends do not have the same atoms in the same order (%d and %d atoms)" % (
             len(left), len(right))
+    ts = ts_file(project, st)
+    if ts and chem.read_xyz(ts).symbols != left.symbols:
+        return "CHECK", "the TS guess %s does not have the atoms of the NEB ends in the same order" % (
+            os.path.relpath(ts, project.root))
     waiting = [s for s in sorted(set(st.left) | set(st.right))
                if not species_result(project, project.species[s], queue)["ok"]]
     if waiting:
@@ -239,8 +261,10 @@ def progress(project, st, queue=None):
         ok, why = approval_state(project, st, "start")
         if not ok:
             files = " and ".join(os.path.relpath(ends[s]["file"], project.root) for s, _ in SIDES)
-            return "approve", "%sNEB ends ready (%s): look at them, then 'mechflow approve %s --start'" % (
-                (why + "; ") if why else "", files, st.id), None
+            ts = ts_file(project, st)
+            return "approve", "%sNEB ends ready (%s%s): look at them, then 'mechflow approve %s --start'" % (
+                (why + "; ") if why else "", files, (", TS guess " + os.path.relpath(ts, project.root)) if ts else "",
+                st.id), None
         to_opt = [s for s, _ in SIDES if ends[s]["opt"]]
         if any(ends[s]["state"] == "absent" for s in to_opt):
             why = lambda s_: "marked 'optimise first'" if wants_optimisation(ends[s_]["mol"]) else "more than one molecule"  # noqa: E731
@@ -300,13 +324,20 @@ def prepare(project, st, action, image=None):
             mol = chem.read_xyz(e["xyz"])
             chem.write_xyz(os.path.join(folder, name), mol, "%s %s end  charge=%d mult=%d" % (st.id, side, st.charge, st.mult))
             lines.append("%s: %s" % (name, os.path.relpath(e["xyz"], project.root)))
+        info = {"item": st.id, "stage": "NEB", "neb_end": RIGHT_END}
+        ts = ts_file(project, st)
+        if ts:                                # the starting path goes through the TS guess (NEB_TS_XYZFILE)
+            chem.write_xyz(os.path.join(folder, TS_GUESS), chem.read_xyz(ts), "%s TS guess  charge=%d mult=%d" % (
+                st.id, st.charge, st.mult))
+            lines.append("%s: %s (the starting path goes through it)" % (TS_GUESS, os.path.relpath(ts, project.root)))
+            info["neb_ts"] = TS_GUESS
         with open(os.path.join(folder, "NEB_ends.txt"), "w") as fh:
             fh.write("The NEB-CI of %s runs from %s (left side of the reaction) to %s (right side):\n%s\n" % (
                 st.id, LEFT_END, RIGHT_END, "\n".join("  " + x for x in lines)))
         write_job(folder, project.settings, "neb", LEFT_END, st.charge, st.mult, jobname(project, st.id, "NEB"),
-                  overrides=st.overrides, info={"item": st.id, "stage": "NEB", "neb_end": RIGHT_END})
+                  overrides=st.overrides, info=info)
         _write_step_info(project, st)
-        return "NEB-CI with %d images between the two ends" % images(project)
+        return "NEB-CI with %d images between the two ends%s" % (images(project, st), ", through the TS guess" if ts else "")
     if action == "prepare_optts":
         nd = os.path.join(sd, NEB)
         folder = os.path.join(sd, OPTTS)

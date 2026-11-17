@@ -31,7 +31,7 @@ def job_settings(settings, kind, overrides=None):
     slurm = dict(settings["slurm"])
     for extra in ((settings.get("stage_overrides") or {}).get(kind) or {}, overrides or {}):
         for k, v in extra.items():
-            if k == "keywords":                  # an ORCA keywords line (render_input), not a resource
+            if k in ("keywords", "neb_images"):  # ORCA input settings (render_input), not resources
                 continue
             if k in res:
                 res[k] = v
@@ -44,13 +44,15 @@ def _block(text):
     return (text or "").strip("\n")
 
 
-def render_input(settings, kind, xyzfile, charge, mult, scan=None, overrides=None, neb_end=None, restart_allxyz=None):
+def render_input(settings, kind, xyzfile, charge, mult, scan=None, overrides=None, neb_end=None, restart_allxyz=None,
+                 neb_ts=None):
     """Text of orca.inp for a job of kind 'opt' | 'scan' | 'optts' | 'irc' | 'sp' | 'neb' | 'nebend'.
 
     'sp' is the Step 5 single point: the method and keywords of settings['single_point'] instead of orca.method
     and orca.keywords, with the same SCF and solvent blocks.
     scan = (i, j, first, last, npoints) with 0-based atom numbers, as ORCA expects.
-    neb_end: for an NEB, the xyz file of its other end (NEB_END_XYZFILE); restart_allxyz: a path to start from."""
+    neb_end: for an NEB, the xyz file of its other end (NEB_END_XYZFILE); restart_allxyz: a path to start from;
+    neb_ts: a TS guess the starting path goes through (NEB_TS_XYZFILE; not with restart_allxyz)."""
     o = settings["orca"]
     res, _ = job_settings(settings, kind, overrides)
     if kind == "sp":
@@ -75,9 +77,12 @@ def render_input(settings, kind, xyzfile, charge, mult, scan=None, overrides=Non
         nb = settings.get("neb") or {}
         out.append("%NEB")
         out.append('    NEB_END_XYZFILE "%s"' % (neb_end or "right_end.xyz"))
-        out.append("    NImages %d   # images between the two ends" % int(nb.get("images") or 8))
+        out.append("    NImages %d   # images between the two ends" % int((overrides or {}).get("neb_images") or
+                                                                            nb.get("images") or 8))
         if restart_allxyz:
             out.append('    Restart_ALLXYZFile "%s"   # the path of the last attempt' % restart_allxyz)
+        elif neb_ts:
+            out.append('    NEB_TS_XYZFILE "%s"   # TS guess: the starting path goes from the left end through it' % neb_ts)
         for ln in _block(nb.get("block")).splitlines():
             if ln.strip():
                 out.append("    " + ln.strip())
@@ -139,7 +144,8 @@ def write_job(folder, settings, kind, xyzfile, charge, mult, jobname, scan=None,
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, "orca.inp"), "w") as fh:
         fh.write(render_input(settings, kind, xyzfile, charge, mult, scan, overrides,
-                              neb_end=(info or {}).get("neb_end"), restart_allxyz=(info or {}).get("restart_allxyz")))
+                              neb_end=(info or {}).get("neb_end"), restart_allxyz=(info or {}).get("restart_allxyz"),
+                              neb_ts=(info or {}).get("neb_ts")))
     with open(os.path.join(folder, "submit.sl"), "w") as fh:
         fh.write(render_submit(settings, kind, jobname, overrides))
     meta = {"kind": kind, "xyz": xyzfile, "charge": charge, "mult": mult, "jobname": jobname,

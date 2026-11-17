@@ -227,3 +227,56 @@ def test_an_end_of_one_molecule_marked_optimise_first_is_optimised(hcn, capsys):
     assert os.path.isfile(os.path.join(ends, "Left", "orca.inp")) and not os.path.exists(os.path.join(ends, "Right"))
     fake_orca.finish_ready_jobs(hcn)
     assert progress(hcn, "S1")[1] == "ends ready (left optimised, right as given)"
+
+
+def test_a_step_can_have_its_own_number_of_images(hcn, fake_sbatch, capsys):
+    settings(hcn, approval=False, images=4)
+    y = os.path.join(hcn, "project.yaml")
+    text = open(y).read()
+    assert "    scan:" in text
+    write(y, text.replace("    scan:", "    neb_images: 100\n    scan:", 1))
+    p = Project.load(hcn)
+    assert not p.errors and p.steps["S1"].overrides == {"neb_images": 100}
+    run(hcn, "next", "--no-squeue")
+    fake_orca.finish_ready_jobs(hcn)                                   # Step 1 of R1 and P1
+    hcn_ends(hcn)
+    run(hcn, "next", "--no-squeue")
+    folder = os.path.join(hcn, "calcs/Steps/S1/Step2Bb_NEB")
+    inp = open(os.path.join(folder, "orca.inp")).read()
+    assert "    NImages 100   # images between the two ends" in inp
+    assert "neb_images" not in open(os.path.join(folder, "submit.sl")).read()
+    capsys.readouterr()
+    run(hcn, "validate")
+    assert "4 images (own: S1 100)" in capsys.readouterr().out
+    write(y, open(y).read().replace("neb_images: 100", "neb_images: 0"))
+    assert any("neb_images must be a whole number" in e for e in Project.load(hcn).errors)
+
+
+def test_an_neb_can_start_through_a_ts_guess(hcn, fake_sbatch, capsys):
+    settings(hcn, approval=True, images=4)
+    y = os.path.join(hcn, "project.yaml")
+    write(y, open(y).read().replace("  images: 4\n", '  images: 4\n  ts: "neb/{step}_ts.xyz"\n', 1))
+    run(hcn, "next", "--no-squeue")
+    fake_orca.finish_ready_jobs(hcn)                                   # Step 1 of R1 and P1
+    hcn_ends(hcn)
+    run(hcn, "approve", "S1", "--start", "--no-squeue")
+    digest = open(os.path.join(hcn, "calcs/Steps/S1/approved_start.txt")).read()
+    mol = chem.read_xyz(os.path.join(hcn, "neb", "S1_left.xyz"))
+    chem.write_xyz(os.path.join(hcn, "neb", "S1_ts.xyz"), mol, "S1 TS guess")
+    stage, detail, _ = progress(hcn, "S1")
+    assert stage == "approve" and "TS guess neb/S1_ts.xyz" in detail      # a new file: the approval no longer holds
+    assert digest
+    run(hcn, "approve", "S1", "--start", "--no-squeue")
+    run(hcn, "next", "--no-squeue")
+    folder = os.path.join(hcn, "calcs/Steps/S1/Step2Bb_NEB")
+    inp = open(os.path.join(folder, "orca.inp")).read()
+    assert 'NEB_TS_XYZFILE "ts_guess.xyz"' in inp and os.path.isfile(os.path.join(folder, "ts_guess.xyz"))
+    assert "ts_guess.xyz" in open(os.path.join(folder, "NEB_ends.txt")).read()
+    capsys.readouterr()
+    run(hcn, "validate")
+    assert "through a TS guess (neb.ts) for 1 step(s): S1" in capsys.readouterr().out
+    bad = chem.Molecule(list(reversed(mol.symbols)), list(reversed(mol.coords)))
+    chem.write_xyz(os.path.join(hcn, "neb", "S1_ts.xyz"), bad, "S1 TS guess, atoms in another order")
+    os.rename(folder, folder + "_away")
+    stage, detail, _ = progress(hcn, "S1")
+    assert stage == "CHECK" and "does not have the atoms of the NEB ends" in detail

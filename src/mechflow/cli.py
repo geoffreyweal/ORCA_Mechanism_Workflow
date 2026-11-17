@@ -178,9 +178,13 @@ def cmd_validate(args):
                                   for sp in built if _parts_ok(p, sp))))
     if neb.enabled(p):
         have = [s for s, st in p.steps.items() if all(os.path.isfile(neb.end_file(p, st, side)) for side, _ in neb.SIDES)]
-        print("note:    Step 2 by NEB-CI (neb.enabled, %d images): both end files for %d of %d step(s)%s" % (
-            neb.images(p), len(have), len(p.steps), "" if len(have) == len(p.steps) else
-            "; none yet for " + ", ".join(s for s in p.steps if s not in have)))
+        own = ["%s %d" % (s, neb.images(p, st)) for s, st in p.steps.items() if "neb_images" in st.overrides]
+        tsg = [s for s, st in p.steps.items() if neb.ts_file(p, st)]
+        print("note:    Step 2 by NEB-CI (neb.enabled, %d images%s): both end files for %d of %d step(s)%s" % (
+            neb.images(p), (" (own: %s)" % ", ".join(own)) if own else "", len(have), len(p.steps),
+            "" if len(have) == len(p.steps) else "; none yet for " + ", ".join(s for s in p.steps if s not in have)))
+        if tsg:
+            print("note:    the NEB starts through a TS guess (neb.ts) for %d step(s): %s" % (len(tsg), ", ".join(tsg)))
     if neb.approval_on(p):
         print("note:    a chemist in the loop (approval.enabled): Step 2 and the OptTS of a step wait for 'mechflow approve'")
         for what in neb.APPROVALS:
@@ -595,6 +599,11 @@ def cmd_sp(args):
 def cmd_chain(args):
     """What a finished job runs: write every input that can be written now and submit it, one job at a time."""
     root = _root(args)
+    # chain switched off since the job was submitted (its script still ends with 'mechflow chain'): start nothing
+    if not ((_load(args, strict=False).settings.get("chain") or {}).get("enabled")):
+        print("mechflow chain: chain.enabled is not true in %s, so nothing is started (run 'mechflow next' and "
+              "'mechflow submit' yourself)" % PROJECT_FILE)
+        return
     lock = os.path.join(root, CHAIN_LOCK)
     if not _take_lock(lock, args.wait):
         _die("another 'mechflow chain' has held %s for %.0f s: run 'mechflow next' and 'mechflow submit' later"

@@ -59,6 +59,7 @@ def test_chain_submits_what_can_start(hcn, fake_sbatch, capsys):
 
 
 def test_chain_lock(hcn, fake_sbatch, capsys):
+    enable_chain(hcn)
     run(hcn, "next", "--no-squeue")
     lock = os.path.join(hcn, CHAIN_LOCK)
     os.mkdir(lock)                                           # another chain is running
@@ -69,3 +70,20 @@ def test_chain_lock(hcn, fake_sbatch, capsys):
     os.utime(lock, (old, old))
     run(hcn, "chain", "--no-squeue", "--wait", "0.2")
     assert "Submitted 2 job(s)." in capsys.readouterr().out and not os.path.exists(lock)
+
+
+def test_chain_switched_off_starts_nothing(hcn, fake_sbatch, capsys):
+    enable_chain(hcn)
+    run(hcn, "next", "--no-squeue")
+    run(hcn, "submit", "--no-squeue")
+    fake_orca.finish_ready_jobs(hcn)                        # Step 1 of R1 and P1 finished
+    y = os.path.join(hcn, "project.yaml")
+    with open(y) as fh:
+        text = fh.read()
+    with open(y, "w") as fh:
+        fh.write(text.replace("chain:\n  enabled: true", "chain:\n  enabled: false"))
+    capsys.readouterr()
+    run(hcn, "chain", "--no-squeue")                         # a job submitted while the chain was on finishes
+    assert "nothing is started" in capsys.readouterr().out
+    assert job_state(os.path.join(hcn, "calcs/Steps/S1/Step2Ba_SCAN")) == "absent"
+    assert not os.path.exists(os.path.join(hcn, CHAIN_LOCK))

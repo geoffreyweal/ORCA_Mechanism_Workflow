@@ -808,7 +808,7 @@ def _write_step_info(project, st):
         lines[5:7] = ["Step 2 by NEB-CI (neb.enabled): from %s to %s (%d images between them); an end of more than "
                       "one molecule is optimised first (%s)" % (
                           os.path.relpath(neb.end_file(project, st, "left"), project.root),
-                          os.path.relpath(neb.end_file(project, st, "right"), project.root), neb.images(project),
+                          os.path.relpath(neb.end_file(project, st, "right"), project.root), neb.images(project, st),
                           neb.NEB_ENDS)]
     with open(os.path.join(sd, "step_info.txt"), "w") as fh:
         fh.write("\n".join(lines) + "\n")
