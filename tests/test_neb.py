@@ -280,3 +280,47 @@ def test_an_neb_can_start_through_a_ts_guess(hcn, fake_sbatch, capsys):
     os.rename(folder, folder + "_away")
     stage, detail, _ = progress(hcn, "S1")
     assert stage == "CHECK" and "does not have the atoms of the NEB ends" in detail
+
+
+def test_a_step_can_choose_scan_or_neb_itself(hcn, fake_sbatch, capsys):
+    """'step2: scan' under a step runs its Step 2 as a SCAN although neb.enabled is on (and 'step2: neb' the other way
+    round); the start approval of a SCAN step needs no end files."""
+    settings(hcn, approval=True)
+    y = os.path.join(hcn, "project.yaml")
+    text = open(y).read()
+    write(y, text.replace("    scan:", "    step2: scan\n    scan:", 1))
+    p = Project.load(hcn)
+    assert not p.errors and p.steps["S1"].overrides == {"step2": "scan"}
+    run(hcn, "next", "--no-squeue")
+    fake_orca.finish_ready_jobs(hcn)                                   # Step 1 of R1 and P1
+    stage, detail, action = progress(hcn, "S1")
+    assert stage == "approve" and "start structure R1 optimised" in detail      # the SCAN route, no NEB ends asked for
+    run(hcn, "approve", "S1", "--start", "--no-squeue")
+    assert "ends:" not in open(os.path.join(hcn, "calcs/Steps/S1/approved_start.txt")).read()
+    run(hcn, "next", "--no-squeue")
+    assert os.path.isfile(os.path.join(hcn, "calcs/Steps/S1/Step2Ba_SCAN/orca.inp"))
+    assert not os.path.exists(os.path.join(hcn, "calcs/Steps/S1/Step2Bb_NEB"))
+    assert "step2" not in open(os.path.join(hcn, "calcs/Steps/S1/Step2Ba_SCAN/submit.sl")).read()
+    assert "SCAN distance" in open(os.path.join(hcn, "calcs/Steps/S1/step_info.txt")).read()
+    capsys.readouterr()
+    run(hcn, "submit", "--no-squeue")
+    assert "Step2Ba_SCAN" in capsys.readouterr().out
+    write(y, open(y).read().replace("step2: scan", "step2: maybe"))
+    assert any("step2 must be 'scan' or 'neb'" in e for e in Project.load(hcn).errors)
+
+
+def test_a_step_can_take_the_neb_when_the_project_scans(hcn, capsys):
+    settings(hcn, neb=False, approval=False)
+    y = os.path.join(hcn, "project.yaml")
+    write(y, open(y).read().replace("    scan:", "    step2: neb\n    scan:", 1) + "\nneb:\n  images: 4\n")
+    run(hcn, "next", "--no-squeue")
+    fake_orca.finish_ready_jobs(hcn)
+    stage, detail, action = progress(hcn, "S1")
+    assert stage == "waiting" and "no NEB end file neb/S1_left.xyz" in detail
+    hcn_ends(hcn)
+    run(hcn, "next", "--no-squeue")
+    assert os.path.isfile(os.path.join(hcn, "calcs/Steps/S1/Step2Bb_NEB/orca.inp"))
+    assert "Step 2 by NEB-CI (this step's step2)" in open(os.path.join(hcn, "calcs/Steps/S1/step_info.txt")).read()
+    capsys.readouterr()
+    run(hcn, "validate")
+    assert "both end files for 1 of 1 step(s)" in capsys.readouterr().out

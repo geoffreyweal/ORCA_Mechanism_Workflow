@@ -61,7 +61,7 @@ def species_jobs(project, sp):
 def step_jobs(project, st):
     sd = project.step_dir(st.id)
     step2 = ([Job(st.id, "step", "Ends", neb.end_folder(project, st, label)) for _, label in neb.SIDES] +
-             [Job(st.id, "step", "NEB", os.path.join(sd, neb.NEB))]) if neb.enabled(project) else \
+             [Job(st.id, "step", "NEB", os.path.join(sd, neb.NEB))]) if neb.enabled(project, st) else \
         [Job(st.id, "step", "SCAN", os.path.join(sd, SCAN))]      # (the other route's folders are left alone)
     return step2 + [
             Job(st.id, "step", "OptTS", os.path.join(sd, OPTTS)),

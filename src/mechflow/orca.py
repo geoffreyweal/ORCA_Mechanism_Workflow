@@ -31,7 +31,7 @@ def job_settings(settings, kind, overrides=None):
     slurm = dict(settings["slurm"])
     for extra in ((settings.get("stage_overrides") or {}).get(kind) or {}, overrides or {}):
         for k, v in extra.items():
-            if k in ("keywords", "neb_images"):  # ORCA input settings (render_input), not resources
+            if k in ("keywords", "neb_images", "step2"):  # ORCA input / route settings, not resources
                 continue
             if k in res:
                 res[k] = v

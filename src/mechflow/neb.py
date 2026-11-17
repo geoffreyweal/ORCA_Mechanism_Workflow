@@ -40,8 +40,14 @@ KCAL_KJ = 4.184
 
 
 # ------------------------------------------------------------------ settings
-def enabled(project):
+def enabled(project, st=None):
+    """Step 2 by NEB-CI? A step's own 'step2: neb' or 'step2: scan' in project.yaml decides for that step; otherwise
+    neb.enabled (the whole project)."""
+    own = (st.overrides or {}).get("step2") if st is not None else None
+    if own in ("neb", "scan"):
+        return own == "neb"
     return bool((project.settings.get("neb") or {}).get("enabled"))
+
 
 
 def images(project, st=None):
@@ -102,7 +108,7 @@ def approval_state(project, st, what):
     if not os.path.isfile(f):
         return False, ""
     text = read_text(f)
-    if what == "start" and enabled(project):
+    if what == "start" and enabled(project, st):
         m = re.search(r"^ends: ([0-9a-f]+)", text, re.M)
         if m and m.group(1) != ends_digest(project, st):
             return False, "the end files changed after you approved them"
@@ -119,7 +125,7 @@ def approve(project, st, what, note=""):
                                                   getpass.getuser(), time.strftime("%Y-%m-%d %H:%M"))]
     if note:
         lines.append("note: %s" % note)
-    if what == "start" and enabled(project):
+    if what == "start" and enabled(project, st):
         lines.append("ends: %s" % ends_digest(project, st))
     with open(approval_file(project, st, what), "w") as fh:
         fh.write("\n".join(lines) + "\n")

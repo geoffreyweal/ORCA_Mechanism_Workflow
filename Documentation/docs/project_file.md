@@ -219,6 +219,9 @@ before the NEB runs. `mechflow validate` says for how many steps both end files 
 - A step can have its own number of images: `neb_images: 100` in its entry in `steps:` (e.g. a long path, or one
   where two protons move). An NEB already written keeps its count: `mechflow reset S5 --stage NEB --from-scratch`,
   then `mechflow next`, writes it again.
+- A step can choose its Step 2 itself: `step2: scan` in its entry in `steps:` runs a SCAN although `neb.enabled` is
+  on, and `step2: neb` runs an NEB-CI although it is off (e.g. the steps a chemist found a good SCAN start for). The
+  other route's folders of that step are left alone. A SCAN step's start approval needs no end files.
 
 ## approval
 

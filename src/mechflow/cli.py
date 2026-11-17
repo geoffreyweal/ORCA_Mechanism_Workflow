@@ -176,13 +176,18 @@ def cmd_validate(args):
         print("note:    %d complex(es) are built from their optimised molecules (complexes.optimise: false): %s" % (
             len(built), ", ".join("%s = %s" % (sp.id, " + ".join(pid for pid, _ in complex_parts(p, sp)))
                                   for sp in built if _parts_ok(p, sp))))
-    if neb.enabled(p):
-        have = [s for s, st in p.steps.items() if all(os.path.isfile(neb.end_file(p, st, side)) for side, _ in neb.SIDES)]
-        own = ["%s %d" % (s, neb.images(p, st)) for s, st in p.steps.items() if "neb_images" in st.overrides]
-        tsg = [s for s, st in p.steps.items() if neb.ts_file(p, st)]
-        print("note:    Step 2 by NEB-CI (neb.enabled, %d images%s): both end files for %d of %d step(s)%s" % (
-            neb.images(p), (" (own: %s)" % ", ".join(own)) if own else "", len(have), len(p.steps),
-            "" if len(have) == len(p.steps) else "; none yet for " + ", ".join(s for s in p.steps if s not in have)))
+    nebs = [s for s, st in p.steps.items() if neb.enabled(p, st)]
+    scans = [s for s in p.steps if s not in nebs]
+    if nebs and scans:
+        print("note:    Step 2 by SCAN for %d step(s) and by NEB-CI for %d (each step's own step2, else neb.enabled); SCAN: %s" % (
+            len(scans), len(nebs), ", ".join(scans)))
+    if nebs:
+        have = [s for s in nebs if all(os.path.isfile(neb.end_file(p, p.steps[s], side)) for side, _ in neb.SIDES)]
+        own = ["%s %d" % (s, neb.images(p, p.steps[s])) for s in nebs if "neb_images" in p.steps[s].overrides]
+        tsg = [s for s in nebs if neb.ts_file(p, p.steps[s])]
+        print("note:    Step 2 by NEB-CI (%d images%s): both end files for %d of %d step(s)%s" % (
+            neb.images(p), (" (own: %s)" % ", ".join(own)) if own else "", len(have), len(nebs),
+            "" if len(have) == len(nebs) else "; none yet for " + ", ".join(s for s in nebs if s not in have)))
         if tsg:
             print("note:    the NEB starts through a TS guess (neb.ts) for %d step(s): %s" % (len(tsg), ", ".join(tsg)))
     if neb.approval_on(p):
@@ -245,7 +250,9 @@ def cmd_status(args):
             print("  %-7s %-10s %s" % (sp.id, label, r["note"] or sp.name))
     skip = skipped_steps(p)
     if steps:
-        print("\nSTEPS (%s -> OptTS -> IRC -> Forwards/Backwards)" % ("NEB ends -> NEB" if neb.enabled(p) else "SCAN"))
+        print("\nSTEPS (%s -> OptTS -> IRC -> Forwards/Backwards)" % (("NEB ends -> NEB" if all(neb.enabled(p, st) for st in steps) else
+                                                                     "SCAN" if not any(neb.enabled(p, st) for st in steps) else
+                                                                     "SCAN or NEB ends -> NEB")))
         for st in steps:
             if st.id in skip:
                 counts["steps skipped"] += 1

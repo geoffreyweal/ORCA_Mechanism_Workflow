@@ -399,6 +399,11 @@ class Project:
                     self.errors.append("step %s: neb_images must be a whole number of 1 or more" % sid)
                 else:
                     st.overrides["neb_images"] = n_
+            if e.get("step2") is not None:               # this step's Step 2: "scan" or "neb" (else neb.enabled)
+                if e["step2"] not in ("scan", "neb"):
+                    self.errors.append("step %s: step2 must be 'scan' or 'neb'" % sid)
+                else:
+                    st.overrides["step2"] = e["step2"]
             try:
                 st.left, st.right = split_reaction(e.get("reaction", ""))
             except ProjectError as exc:

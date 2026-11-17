@@ -523,7 +523,7 @@ def step_progress(project, st, queue=None):
     t3 = os.path.join(sd, OPTTS)
     s3 = job_state(t3, queue)
     if s3 == "absent":
-        stage, detail, action = (neb.progress(project, st, queue) if neb.enabled(project)
+        stage, detail, action = (neb.progress(project, st, queue) if neb.enabled(project, st)
                                  else _scan_progress(project, st, queue))
         if action == "prepare_optts":
             ok, why = neb.approval_state(project, st, "guess")
@@ -708,7 +708,7 @@ def project_expression(counter):
 
 def prepare(project, st, action, image=None):
     """Write the input of the next stage of a step. Returns a one-line message."""
-    if action in ("prepare_neb_ends", "prepare_neb") or (action == "prepare_optts" and neb.enabled(project)):
+    if action in ("prepare_neb_ends", "prepare_neb") or (action == "prepare_optts" and neb.enabled(project, st)):
         return neb.prepare(project, st, action, image)
     sd = project.step_dir(st.id)
     i, j = st.atoms
@@ -804,9 +804,10 @@ def _write_step_info(project, st):
                  "stretched" if st.mode == "stretch" else "brought together", st.to, st.scan_step),
              "Charge %d, multiplicity %d" % (st.charge, st.mult), "",
              "Run 'mechflow next' after each stage: it checks the stage and writes the next input."]
-    if neb.enabled(project):
-        lines[5:7] = ["Step 2 by NEB-CI (neb.enabled): from %s to %s (%d images between them); an end of more than "
+    if neb.enabled(project, st):
+        lines[5:7] = ["Step 2 by NEB-CI (%s): from %s to %s (%d images between them); an end of more than "
                       "one molecule is optimised first (%s)" % (
+                          "this step's step2" if (st.overrides or {}).get("step2") else "neb.enabled",
                           os.path.relpath(neb.end_file(project, st, "left"), project.root),
                           os.path.relpath(neb.end_file(project, st, "right"), project.root), neb.images(project, st),
                           neb.NEB_ENDS)]
@@ -872,7 +873,7 @@ def job_folders(project, species, steps, with_sp=True):
             yield species_sp_dir(project, sp.id)
     for st in steps:
         sd = project.step_dir(st.id)
-        if neb.enabled(project):                 # Step 2 by NEB: SCAN folders written before are left alone
+        if neb.enabled(project, st):             # Step 2 by NEB: SCAN folders written before are left alone
             for _, label in neb.SIDES:
                 yield neb.end_folder(project, st, label)
             yield os.path.join(sd, neb.NEB)
